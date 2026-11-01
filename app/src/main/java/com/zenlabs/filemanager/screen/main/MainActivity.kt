@@ -1,0 +1,821 @@
+package com.zenlabs.filemanager.screen.main
+
+import android.content.Intent
+import android.os.Bundle
+import android.os.Environment
+import android.os.PowerManager
+import android.provider.Settings
+import android.content.Context
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Velocity
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import com.zenlabs.filemanager.App.Companion.globalClass
+import com.zenlabs.filemanager.R
+import com.zenlabs.filemanager.base.BaseActivity
+import com.zenlabs.filemanager.common.isNot
+import com.zenlabs.filemanager.common.showMsg
+import com.zenlabs.filemanager.common.toJson
+import com.zenlabs.filemanager.common.ui.SafeSurface
+import com.zenlabs.filemanager.screen.main.tab.apps.AppsTab
+import com.zenlabs.filemanager.screen.main.tab.apps.ui.AppsTabContentView
+import com.zenlabs.filemanager.screen.main.tab.files.FilesTab
+import com.zenlabs.filemanager.screen.main.tab.files.holder.LocalFileHolder
+import com.zenlabs.filemanager.screen.main.tab.files.ui.FilesTabContentView
+import com.zenlabs.filemanager.screen.main.tab.home.HomeTab
+import com.zenlabs.filemanager.screen.main.tab.home.ui.HomeTabContentView
+import com.zenlabs.filemanager.screen.main.ui.AppInfoDialog
+import com.zenlabs.filemanager.screen.main.ui.JumpToPathDialog
+import com.zenlabs.filemanager.screen.main.ui.OnboardingScreen
+import com.zenlabs.filemanager.screen.main.ui.SaveTextEditorFilesDialog
+import com.zenlabs.filemanager.screen.main.ui.StartupTabsSettingsScreen
+import com.zenlabs.filemanager.screen.main.ui.TabLayout
+import com.zenlabs.filemanager.screen.main.ui.Toolbar
+import com.zenlabs.filemanager.theme.FileExplorerTheme
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ModalNavigationDrawer
+import com.zenlabs.filemanager.screen.main.ui.NFileDrawerContent
+import com.zenlabs.filemanager.screen.main.tab.nfile_tools.*
+import com.zenlabs.filemanager.screen.main.tab.nfile_tools.ui.*
+import com.zenlabs.filemanager.screen.main.tab.files.shizuku.ShizukuManager
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.io.File
+import kotlin.math.abs
+import kotlin.math.exp
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+
+
+class MainActivity : BaseActivity() {
+    private val HOME_SCREEN_SHORTCUT_EXTRA_KEY = "filePath"
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        // Initialize Shizuku access manager (registers binder listeners)
+        ShizukuManager.initialize()
+        checkPermissions()
+    }
+
+    override fun onPermissionGranted() {
+        setContent {
+            FileExplorerTheme {
+                SafeSurface {
+                    // Show onboarding carousel on first install; never again after that.
+                    var onboardingDone by remember {
+                        mutableStateOf(globalClass.preferencesManager.hasShownOnboarding)
+                    }
+
+                    if (!onboardingDone) {
+                        OnboardingScreen(
+                            onFinish = {
+                                globalClass.preferencesManager.hasShownOnboarding = true
+                                onboardingDone = true
+                            }
+                        )
+                        return@SafeSurface
+                    }
+
+                    var showBatteryPrompt by remember { mutableStateOf(false) }
+                    LaunchedEffect(onboardingDone) {
+                        if (onboardingDone && !globalClass.preferencesManager.hasCompletedBatteryOptimizationPrompt) {
+                            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                            val ignoring = try {
+                                pm?.isIgnoringBatteryOptimizations(packageName) == true
+                            } catch (_: Exception) { true }
+                            if (ignoring) {
+                                globalClass.preferencesManager.hasCompletedBatteryOptimizationPrompt = true
+                            } else {
+                                showBatteryPrompt = true
+                            }
+                        }
+                    }
+                    if (showBatteryPrompt) {
+                        AlertDialog(
+                            onDismissRequest = {
+                                globalClass.preferencesManager.hasCompletedBatteryOptimizationPrompt = true
+                                showBatteryPrompt = false
+                            },
+                            title = { Text("Battery optimization") },
+                            text = { Text("For reliable background file operations, you can allow the app to ignore battery optimizations. This is optional.") },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    globalClass.preferencesManager.hasCompletedBatteryOptimizationPrompt = true
+                                    showBatteryPrompt = false
+                                    try {
+                                        startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                                    } catch (_: Exception) {
+                                        try {
+                                            startActivity(Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS))
+                                        } catch (_: Exception) {
+                                            showMsg("Open system Settings → Battery to review optimization for this app.")
+                                        }
+                                    }
+                                }) { Text("Review settings") }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = {
+                                    globalClass.preferencesManager.hasCompletedBatteryOptimizationPrompt = true
+                                    showBatteryPrompt = false
+                                }) { Text("Don't remind again") }
+                            }
+                        )
+                    }
+
+                    val coroutineScope = rememberCoroutineScope()
+                    val mainActivityManager = globalClass.mainActivityManager
+                    val mainActivityState by mainActivityManager.state.collectAsState()
+                    var backPressedOnce by remember { mutableStateOf(false) }
+
+                    BackHandler {
+                        coroutineScope.launch {
+                            if (mainActivityManager.canExit()) {
+                                if (!globalClass.preferencesManager.confirmBeforeAppClose || backPressedOnce) {
+                                    mainActivityManager.clearTabsForExit()
+                                    finish()
+                                } else {
+                                    backPressedOnce = true
+                                    showMsg(R.string.press_back_again)
+                                    launch {
+                                        delay(2000)
+                                        backPressedOnce = false
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+                        mainActivityManager.onResume()
+                    }
+
+                    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+                        mainActivityManager.onStop()
+                    }
+
+                    LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) {
+                        if (globalClass.preferencesManager.rememberLastSession)
+                            mainActivityManager.saveSession()
+                    }
+
+                    LaunchedEffect(Unit) {
+                        mainActivityManager.checkForUpdate()
+                        if (hasIntent()) {
+                            handleIntent()
+                        } else {
+                            if (mainActivityState.tabs.isEmpty()) {
+                                mainActivityManager.loadStartupTabs()
+                            }
+                        }
+                    }
+
+                    JumpToPathDialog(
+                        show = mainActivityState.showJumpToPathDialog,
+                        onDismiss = { mainActivityManager.toggleJumpToPathDialog(false) }
+                    )
+
+                    AppInfoDialog(
+                        show = mainActivityState.showAppInfoDialog,
+                        hasNewUpdate = mainActivityState.hasNewUpdate,
+                        onDismiss = { mainActivityManager.toggleAppInfoDialog(false) }
+                    )
+
+                    SaveTextEditorFilesDialog(
+                        show = mainActivityState.showSaveEditorFilesDialog,
+                        isSaving = mainActivityState.isSavingFiles,
+                        onDismiss = { mainActivityManager.toggleSaveEditorFilesDialog(false) },
+                        onIgnore = {
+                            mainActivityManager.ignoreTextEditorFiles()
+                            finish()
+                        },
+                        onSave = { mainActivityManager.saveTextEditorFiles { finish() } }
+                    )
+
+                    StartupTabsSettingsScreen(mainActivityState.showStartupTabsDialog) {
+                        mainActivityManager.toggleStartupTabsDialog(false)
+                        globalClass.preferencesManager.startupTabs = it.toJson()
+                    }
+
+                    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+                    val drawerScope = rememberCoroutineScope()
+
+                    BackHandler(enabled = drawerState.isOpen) {
+                        drawerScope.launch {
+                            drawerState.close()
+                        }
+                    }
+
+                    ModalNavigationDrawer(
+                        drawerState = drawerState,
+                        gesturesEnabled = drawerState.isOpen || !globalClass.preferencesManager.disableNavigationGestures,
+                        drawerContent = {
+                            NFileDrawerContent(
+                                drawerState = drawerState,
+                                onNavigate = {
+                                    drawerScope.launch { drawerState.close() }
+                                }
+                            )
+                        }
+                    ) {
+                        val density = androidx.compose.ui.platform.LocalDensity.current
+                        val edgeSwipeThresholdPx = with(density as Density) { 24.dp.toPx() }
+                        val dragThresholdPx = with(density as Density) { 48.dp.toPx() }
+                        val isLandscape = LocalConfiguration.current.orientation ==
+                            android.content.res.Configuration.ORIENTATION_LANDSCAPE
+
+                        Column(
+                            Modifier
+                                .fillMaxSize()
+                                .pointerInput(drawerState.isOpen) {
+                                    if (drawerState.isOpen) return@pointerInput
+                                    awaitEachGesture {
+                                        val down = awaitFirstDown(
+                                            requireUnconsumed = false,
+                                            pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial
+                                        )
+                                        if (down.position.x > edgeSwipeThresholdPx) return@awaitEachGesture
+                                        var totalDrag = 0f
+                                        do {
+                                            val event = awaitPointerEvent(
+                                                androidx.compose.ui.input.pointer.PointerEventPass.Initial
+                                            )
+                                            val drag = event.changes.firstOrNull()?.positionChange()?.x ?: 0f
+                                            if (drag > 0f) {
+                                                totalDrag += drag
+                                                event.changes.forEach { it.consume() }
+                                            }
+                                            if (totalDrag > dragThresholdPx) {
+                                                drawerScope.launch { drawerState.open() }
+                                                return@awaitEachGesture
+                                            }
+                                        } while (event.changes.any { it.pressed })
+                                    }
+                                }
+                        ) {
+
+                            val moveToolbarToBottom =
+                                globalClass.preferencesManager.moveToolbarToBottom
+                            val moveTabsToBottom =
+                                globalClass.preferencesManager.moveTabsToBottom
+                            val autoHideToolbars = if (isLandscape) {
+                                globalClass.preferencesManager.autoHideToolbarsLandscape
+                            } else {
+                                globalClass.preferencesManager.autoHideToolbars
+                            }
+
+                            // Track scroll direction for auto-hide
+                            var toolbarsVisible by remember { mutableStateOf(true) }
+                            val autoHideScrollConnection = remember(autoHideToolbars) {
+                                object : NestedScrollConnection {
+                                    private var accumulatedDelta = 0f
+                                    private val threshold = 8f
+                                    override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                                        if (!autoHideToolbars) return Offset.Zero
+                                        accumulatedDelta += available.y
+                                        if (accumulatedDelta < -threshold) {
+                                            toolbarsVisible = false
+                                            accumulatedDelta = 0f
+                                        } else if (accumulatedDelta > threshold) {
+                                            toolbarsVisible = true
+                                            accumulatedDelta = 0f
+                                        }
+                                        return Offset.Zero
+                                    }
+                                }
+                            }
+
+                            // Animation spec for toolbar hide/show
+                            val toolbarEnter = slideInVertically(
+                                animationSpec = tween(220, easing = FastOutSlowInEasing),
+                                initialOffsetY = { -it }
+                            )
+                            val toolbarExit = slideOutVertically(
+                                animationSpec = tween(220, easing = FastOutSlowInEasing),
+                                targetOffsetY = { -it }
+                            )
+                            val tabEnter = slideInVertically(
+                                animationSpec = tween(220, easing = FastOutSlowInEasing),
+                                initialOffsetY = { -it }
+                            )
+                            val tabExit = slideOutVertically(
+                                animationSpec = tween(220, easing = FastOutSlowInEasing),
+                                targetOffsetY = { -it }
+                            )
+                            val bottomTabEnter = slideInVertically(
+                                animationSpec = tween(220, easing = FastOutSlowInEasing),
+                                initialOffsetY = { it }
+                            )
+                            val bottomTabExit = slideOutVertically(
+                                animationSpec = tween(220, easing = FastOutSlowInEasing),
+                                targetOffsetY = { it }
+                            )
+
+                            if (!moveToolbarToBottom) {
+                                AnimatedVisibility(
+                                    visible = !autoHideToolbars || toolbarsVisible,
+                                    enter = toolbarEnter,
+                                    exit = toolbarExit
+                                ) {
+                                    MainToolbarView(
+                                        state = mainActivityState,
+                                        drawerScope = drawerScope,
+                                        drawerState = drawerState
+                                    )
+                                }
+                            }
+
+                            if (!moveTabsToBottom) {
+                                AnimatedVisibility(
+                                    visible = !autoHideToolbars || toolbarsVisible,
+                                    enter = tabEnter,
+                                    exit = tabExit
+                                ) {
+                                    MainTabsView(
+                                        state = mainActivityState,
+                                        mainActivityManager = mainActivityManager,
+                                        isAtBottom = false
+                                    )
+                                }
+                            }
+
+                            TabsPager(
+                                state = mainActivityState,
+                                extraNestedScrollConnection = autoHideScrollConnection
+                            )
+
+                            if (moveTabsToBottom) {
+                                AnimatedVisibility(
+                                    visible = !autoHideToolbars || toolbarsVisible,
+                                    enter = bottomTabEnter,
+                                    exit = bottomTabExit
+                                ) {
+                                    MainTabsView(
+                                        state = mainActivityState,
+                                        mainActivityManager = mainActivityManager,
+                                        isAtBottom = true
+                                    )
+                                }
+                            }
+
+                            if (moveToolbarToBottom) {
+                                AnimatedVisibility(
+                                    visible = !autoHideToolbars || toolbarsVisible,
+                                    enter = bottomTabEnter,
+                                    exit = bottomTabExit
+                                ) {
+                                    MainToolbarView(
+                                        state = mainActivityState,
+                                        drawerScope = drawerScope,
+                                        drawerState = drawerState
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun MainToolbarView(
+        state: MainActivityState,
+        drawerScope: kotlinx.coroutines.CoroutineScope,
+        drawerState: androidx.compose.material3.DrawerState
+    ) {
+        if (!globalClass.preferencesManager.hideToolbar) {
+            Toolbar(
+                title = state.title,
+                subtitle = state.subtitle,
+                hasNewUpdate = state.hasNewUpdate,
+                onToggleAppInfoDialog = {
+                    drawerScope.launch { drawerState.open() }
+                }
+            )
+        }
+    }
+
+    @Composable
+    private fun MainTabsView(
+        state: MainActivityState,
+        mainActivityManager: MainActivityManager,
+        isAtBottom: Boolean
+    ) {
+        val configuration = LocalConfiguration.current
+        val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        if (!globalClass.preferencesManager.disableTabBar && !isLandscape) {
+            TabLayout(
+                tabLayoutState = state.tabLayoutState,
+                tabs = state.tabs,
+                selectedTabIndex = state.selectedTabIndex,
+                onReorder = { from, to -> mainActivityManager.reorderTabs(from, to) },
+                onAddNewTab = { mainActivityManager.addDefaultOrOverriddenNewTab() },
+                isAtBottom = isAtBottom
+            )
+        }
+    }
+
+    @Composable
+    fun ColumnScope.TabsPager(
+        state: MainActivityState,
+        extraNestedScrollConnection: NestedScrollConnection? = null
+    ) {
+        val manager = globalClass.mainActivityManager
+
+        if (state.tabs.isEmpty()) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                CircularProgressIndicator()
+            }
+        } else {
+            val pagerState = rememberPagerState(initialPage = state.selectedTabIndex) {
+                state.tabs.size
+            }
+            val activeTabId = state.tabs.getOrNull(state.selectedTabIndex)?.id
+
+            LaunchedEffect(state.selectedTabIndex, activeTabId) {
+                if (pagerState.currentPage isNot state.selectedTabIndex) {
+                    pagerState.scrollToPage(state.selectedTabIndex)
+                }
+                if (!globalClass.preferencesManager.disableTabBar) {
+                    val page = state.selectedTabIndex
+                    if (page == 0) {
+                        state.tabLayoutState.animateScrollToItem(0, 0)
+                    } else {
+                        val layoutInfo = state.tabLayoutState.layoutInfo
+                        val visibleItem = layoutInfo.visibleItemsInfo.find { it.index == page }
+                        if (visibleItem == null) {
+                            state.tabLayoutState.animateScrollToItem(page, 0)
+                        } else {
+                            val viewportStart = layoutInfo.viewportStartOffset
+                            val viewportEnd = layoutInfo.viewportEndOffset
+                            val itemStart = visibleItem.offset
+                            val itemEnd = visibleItem.offset + visibleItem.size
+                            if (itemStart < viewportStart) {
+                                state.tabLayoutState.animateScrollToItem(page, 0)
+                            } else if (itemEnd > viewportEnd) {
+                                val scrollDelta = (itemEnd - viewportEnd).toFloat()
+                                state.tabLayoutState.animateScrollBy(scrollDelta)
+                            }
+                        }
+                    }
+                }
+            }
+
+            LaunchedEffect(pagerState.currentPage) {
+                snapshotFlow { pagerState.currentPage }.collect { page ->
+                    if (page isNot state.selectedTabIndex) {
+                        manager.selectTabAt(page, true)
+                    }
+                    if (!globalClass.preferencesManager.disableTabBar) {
+                        if (page == 0) {
+                            state.tabLayoutState.animateScrollToItem(0, 0)
+                        } else {
+                            val layoutInfo = state.tabLayoutState.layoutInfo
+                            val visibleItem = layoutInfo.visibleItemsInfo.find { it.index == page }
+                            if (visibleItem == null) {
+                                state.tabLayoutState.animateScrollToItem(page, 0)
+                            } else {
+                                val viewportStart = layoutInfo.viewportStartOffset
+                                val viewportEnd = layoutInfo.viewportEndOffset
+                                val itemStart = visibleItem.offset
+                                val itemEnd = visibleItem.offset + visibleItem.size
+                                if (itemStart < viewportStart) {
+                                    state.tabLayoutState.animateScrollToItem(page, 0)
+                                } else if (itemEnd > viewportEnd) {
+                                    val scrollDelta = (itemEnd - viewportEnd).toFloat()
+                                    state.tabLayoutState.animateScrollBy(scrollDelta)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            var overscrollAmount by remember { mutableFloatStateOf(0f) }
+            val threshold = 100f
+            val animationScope = rememberCoroutineScope()
+            var isAnimatingBack by remember { mutableStateOf(false) }
+
+            // Gate ALL navigation gestures (swipe-to-switch-tab, swipe-to-new-tab)
+            val gesturesEnabled = !globalClass.preferencesManager.disableNavigationGestures
+
+            fun applyExponentialTension(current: Float, addition: Float, threshold: Float): Float {
+                return if (current < threshold) {
+                    current + addition
+                } else {
+                    val excess = current - threshold
+                    val decayFactor = exp(-excess / threshold * 2f)
+                    current + (addition * decayFactor)
+                }
+            }
+
+            val nestedScrollConnection = remember(gesturesEnabled) {
+                object : NestedScrollConnection {
+                    override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                        if (!gesturesEnabled) return Offset.Zero
+                        val isLastPage = pagerState.currentPage == pagerState.pageCount - 1
+                        if (isLastPage && overscrollAmount > 0 && available.x > 0 && !isAnimatingBack) {
+                            val consumeAmount = minOf(available.x, overscrollAmount)
+                            overscrollAmount = maxOf(0f, overscrollAmount - consumeAmount)
+                            return Offset(consumeAmount, 0f)
+                        }
+                        return Offset.Zero
+                    }
+
+                    override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                        if (!gesturesEnabled) return Offset.Zero
+                        val isLastPage = pagerState.currentPage == pagerState.pageCount - 1
+                        if (isLastPage && available.x < 0 && source == NestedScrollSource.UserInput && !isAnimatingBack) {
+                            overscrollAmount = applyExponentialTension(
+                                overscrollAmount, abs(available.x), threshold
+                            )
+                            return Offset(available.x, 0f)
+                        }
+                        return Offset.Zero
+                    }
+
+                    override suspend fun onPreFling(available: Velocity): Velocity {
+                        if (!gesturesEnabled) return Velocity.Zero
+                        val isLastPage = pagerState.currentPage == pagerState.pageCount - 1
+                        if (isLastPage && overscrollAmount > 0 && !isAnimatingBack) {
+                            if (overscrollAmount > threshold) manager.addDefaultOrOverriddenNewTab()
+                            isAnimatingBack = true
+                            animationScope.launch {
+                                animate(
+                                    initialValue = overscrollAmount,
+                                    targetValue = 0f,
+                                    animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)
+                                ) { value, _ -> overscrollAmount = value }
+                                isAnimatingBack = false
+                            }
+                            return Velocity.Zero
+                        }
+                        return Velocity.Zero
+                    }
+                }
+            }
+
+            val taskManager = globalClass.taskManager
+            val bannerVersion = taskManager.taskAddedBannerVersion
+            var showTaskBanner by remember { mutableStateOf(false) }
+            LaunchedEffect(bannerVersion) {
+                if (bannerVersion > 0 && taskManager.hasUnconsumedTaskBanner) {
+                    taskManager.hasUnconsumedTaskBanner = false
+                    showTaskBanner = true
+                    delay(1800)
+                    showTaskBanner = false
+                }
+            }
+
+            androidx.compose.foundation.layout.Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                HorizontalPager(
+                    state = pagerState,
+                    // Disable swipe-to-switch-tab when navigation gestures are off
+                    userScrollEnabled = gesturesEnabled,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .nestedScroll(nestedScrollConnection)
+                        .then(
+                            if (extraNestedScrollConnection != null)
+                                Modifier.nestedScroll(extraNestedScrollConnection)
+                            else Modifier
+                        ),
+                    key = { state.tabs[it].id }
+                ) { index ->
+                    key(index) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer {
+                                    translationX = -overscrollAmount
+                                },
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            if (state.tabs.isNotEmpty()) {
+                                val currentTab = state.tabs[index]
+                                when (currentTab) {
+                                    is FilesTab -> {
+                                        FilesTabContentView(currentTab)
+                                    }
+
+                                is HomeTab -> {
+                                    HomeTabContentView(currentTab)
+                                }
+
+                                is AppsTab -> {
+                                    AppsTabContentView(currentTab)
+                                }
+
+                                is VaultTab -> {
+                                    VaultTabContentView(currentTab)
+                                }
+
+                                is FtpServerTab -> {
+                                    FtpServerTabContentView(currentTab)
+                                }
+
+                                is WebSharingTab -> {
+                                    WebSharingTabContentView(currentTab)
+                                }
+
+                                is NetworkConnectionWizardTab -> {
+                                    NetworkConnectionWizardScreen(currentTab)
+                                }
+
+                                is RemoteExplorerTab -> {
+                                    RemoteExplorerScreen(currentTab)
+                                }
+
+                                    is StorageAnalysisTab -> {
+                                        StorageAnalysisScreen(currentTab)
+                                    }
+
+                                    is DuplicateFinderTab -> {
+                                        DuplicateFinderScreen(currentTab)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = showTaskBanner && taskManager.taskAddedBannerMessage.isNotEmpty(),
+                    enter = fadeIn(tween(150)),
+                    exit = fadeOut(tween(150)),
+                    modifier = Modifier
+                        .align(
+                            if (globalClass.preferencesManager.moveTabsToBottom) {
+                                Alignment.TopCenter
+                            } else {
+                                Alignment.BottomCenter
+                            }
+                        )
+                        .padding(vertical = 72.dp, horizontal = 24.dp)
+                ) {
+                    androidx.compose.material3.Surface(
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp),
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.inverseSurface,
+                        contentColor = androidx.compose.material3.MaterialTheme.colorScheme.inverseOnSurface,
+                        shadowElevation = 6.dp
+                    ) {
+                        Text(
+                            text = taskManager.taskAddedBannerMessage,
+                            style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        com.zenlabs.filemanager.screen.main.tab.files.service.remote.NetworkConnectionsService.notifyRootsChanged(this)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        ShizukuManager.cleanup()
+        globalClass.cleanOnExitDir()
+    }
+
+    private fun hasIntent(): Boolean {
+        val i = intent ?: return false
+        return i.hasExtra(HOME_SCREEN_SHORTCUT_EXTRA_KEY) ||
+                i.hasExtra(com.zenlabs.filemanager.screen.openwith.OpenWithDispatchActivity.EXTRA_OPEN_ARCHIVE) ||
+                i.hasExtra(com.zenlabs.filemanager.screen.openwith.OpenWithDispatchActivity.EXTRA_OPEN_APK) ||
+                i.hasExtra(com.zenlabs.filemanager.screen.openwith.OpenWithDispatchActivity.EXTRA_OPEN_PREFS)
+    }
+
+    private fun handleIntent() {
+        val currentIntent = intent ?: return
+        when {
+            currentIntent.hasExtra(HOME_SCREEN_SHORTCUT_EXTRA_KEY) -> {
+                val path = currentIntent.getStringExtra(HOME_SCREEN_SHORTCUT_EXTRA_KEY)
+                if (!path.isNullOrEmpty()) {
+                    val file = File(path)
+                    val localHolder = LocalFileHolder(file)
+                    if (!localHolder.isFolder && localHolder.exists()) {
+                        val fileUri = localHolder.createUri()
+                        val dispatchIntent = Intent(this, com.zenlabs.filemanager.screen.openwith.OpenWithDispatchActivity::class.java).apply {
+                            action = Intent.ACTION_VIEW
+                            setDataAndType(fileUri, localHolder.mimeType)
+                            putExtra("extra_file_path", localHolder.file.absolutePath)
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                        }
+                        startActivity(dispatchIntent)
+                        finish()
+                    } else {
+                        globalClass.mainActivityManager.jumpToFile(
+                            file = localHolder,
+                            context = this
+                        )
+                    }
+                }
+                intent = null
+            }
+            currentIntent.hasExtra(com.zenlabs.filemanager.screen.openwith.OpenWithDispatchActivity.EXTRA_OPEN_ARCHIVE) -> {
+                val path = currentIntent.getStringExtra(com.zenlabs.filemanager.screen.openwith.OpenWithDispatchActivity.EXTRA_OPEN_ARCHIVE)
+                if (!path.isNullOrEmpty()) {
+                    val archiveFile = LocalFileHolder(File(path))
+                    if (globalClass.mainActivityManager.getActiveTab() == null) {
+                        val parentFolder = archiveFile.file.parentFile?.let { LocalFileHolder(it) } ?: LocalFileHolder(Environment.getExternalStorageDirectory())
+                        globalClass.mainActivityManager.addTabAndSelect(FilesTab(parentFolder))
+                    }
+                    globalClass.zipManager.openArchive(archiveFile)
+                }
+                intent = null
+            }
+            currentIntent.hasExtra(com.zenlabs.filemanager.screen.openwith.OpenWithDispatchActivity.EXTRA_OPEN_APK) -> {
+                val path = currentIntent.getStringExtra(com.zenlabs.filemanager.screen.openwith.OpenWithDispatchActivity.EXTRA_OPEN_APK)
+                if (!path.isNullOrEmpty()) {
+                    val apkFile = LocalFileHolder(File(path))
+                    val parentFolder = apkFile.file.parentFile?.let { LocalFileHolder(it) } ?: LocalFileHolder(Environment.getExternalStorageDirectory())
+                    val filesTab = FilesTab(parentFolder)
+                    globalClass.mainActivityManager.addTabAndSelect(filesTab)
+                    filesTab.toggleApkDialog(apkFile)
+                }
+                intent = null
+            }
+            currentIntent.hasExtra(com.zenlabs.filemanager.screen.openwith.OpenWithDispatchActivity.EXTRA_OPEN_PREFS) -> {
+                val path = currentIntent.getStringExtra(com.zenlabs.filemanager.screen.openwith.OpenWithDispatchActivity.EXTRA_OPEN_PREFS)
+                if (!path.isNullOrEmpty()) {
+                    val prefsFile = LocalFileHolder(File(path))
+                    val parentFolder = prefsFile.file.parentFile?.let { LocalFileHolder(it) } ?: LocalFileHolder(Environment.getExternalStorageDirectory())
+                    val filesTab = FilesTab(parentFolder)
+                    globalClass.mainActivityManager.addTabAndSelect(filesTab)
+                    filesTab.toggleImportPrefsDialog(prefsFile)
+                }
+                intent = null
+            }
+        }
+    }
+}

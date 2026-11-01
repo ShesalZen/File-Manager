@@ -1,0 +1,314 @@
+package com.zenlabs.filemanager
+
+import android.app.Application
+import android.content.Context
+import android.net.Uri
+import android.os.Environment
+import android.os.Process
+import android.widget.Toast
+import androidx.annotation.StringRes
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import coil3.ImageLoader
+import coil3.PlatformContext
+import coil3.bitmapFactoryMaxParallelism
+import coil3.gif.GifDecoder
+import coil3.memory.MemoryCache
+import coil3.request.CachePolicy
+import coil3.request.addLastModifiedToFileCacheKey
+import coil3.request.allowConversionToBitmap
+import coil3.request.crossfade
+import coil3.svg.SvgDecoder
+import coil3.video.VideoFrameDecoder
+import com.zenlabs.filemanager.coil.apk.ApkFileDecoder
+import com.zenlabs.filemanager.coil.audio.AudioFileDecoder
+import com.zenlabs.filemanager.coil.comic.ComicCoverDecoder
+import com.zenlabs.filemanager.coil.document.OfficeFileDecoder
+import com.zenlabs.filemanager.coil.epub.EpubCoverDecoder
+import com.zenlabs.filemanager.coil.pdf.PdfFileDecoder
+import com.zenlabs.filemanager.coil.zip.ZipFileFetcher
+import com.zenlabs.filemanager.coil.zip.ZipFileKeyer
+import com.zenlabs.filemanager.common.BrandCompatibility
+import com.zenlabs.filemanager.common.BrandMigration
+import com.zenlabs.filemanager.common.BrandMigrationResult
+import com.zenlabs.filemanager.common.FileExplorerLogger
+import com.zenlabs.filemanager.screen.main.MainActivityManager
+import com.zenlabs.filemanager.screen.main.tab.files.coil.DocumentFileMapper
+import com.zenlabs.filemanager.screen.main.tab.files.holder.LocalFileHolder
+import com.zenlabs.filemanager.screen.main.tab.files.search.SearchManager
+import com.zenlabs.filemanager.screen.main.tab.files.search.ai.MlKitInitializer
+import com.zenlabs.filemanager.screen.main.tab.files.service.RecycleBinManager
+import com.zenlabs.filemanager.screen.main.tab.files.service.remote.SftpRemoteClient
+import com.zenlabs.filemanager.screen.main.tab.files.task.TaskManager
+import com.zenlabs.filemanager.screen.main.tab.files.zip.ZipManager
+import com.zenlabs.filemanager.screen.preferences.PreferencesManager
+import com.zenlabs.filemanager.screen.textEditor.TextEditorManager
+import com.zenlabs.filemanager.screen.textEditor.keyword.KeywordManager
+import com.zenlabs.filemanager.screen.viewer.ViewersManager
+import io.github.rosemoe.sora.langs.textmate.registry.FileProviderRegistry
+
+import io.github.rosemoe.sora.langs.textmate.registry.GrammarRegistry
+import io.github.rosemoe.sora.langs.textmate.registry.ThemeRegistry
+import io.github.rosemoe.sora.langs.textmate.registry.model.ThemeModel
+import io.github.rosemoe.sora.langs.textmate.registry.provider.AssetsFileResolver
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers.IO
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import org.eclipse.tm4e.core.registry.IThemeSource
+import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.system.exitProcess
+
+class App : Application(), coil3.SingletonImageLoader.Factory {
+    companion object {
+        lateinit var appContext: Context
+
+        val globalClass
+            get() = appContext as App
+
+        val logger
+            get() = globalClass.logger
+    }
+
+    private val applicationScope = CoroutineScope(SupervisorJob() + IO)
+
+    // Share-to-folder mode (opened on demand from Save to File Manager)
+    var isShareMode: Boolean by mutableStateOf(false)
+    var shareUris: List<Uri> by mutableStateOf(emptyList())
+    var shareText: String? by mutableStateOf(null)
+
+    fun clearShareMode() {
+        isShareMode = false
+        shareUris = emptyList()
+        shareText = null
+    }
+
+    lateinit var logger: FileExplorerLogger
+        private set
+
+    val appFiles: LocalFileHolder
+        get() {
+            val storageRoot = Environment.getExternalStorageDirectory()
+            val zenLabsDirectory = File(storageRoot, BrandCompatibility.ZENLABS_APP_DIRECTORY)
+            val legacyDirectory = File(storageRoot, BrandCompatibility.LEGACY_PRISM_APP_DIRECTORY)
+            val directory = BrandMigration.preferredDirectory(zenLabsDirectory, legacyDirectory)
+            return LocalFileHolder(directory.apply { if (!exists()) mkdirs() })
+        }
+
+    val recycleBinDir: LocalFileHolder
+        get() = LocalFileHolder(
+            File(
+                appFiles.file,
+                "bin"
+            ).apply { mkdirs() })
+
+    private var uid = AtomicInteger(0)
+
+    val cleanOnExitDir
+        get() = LocalFileHolder(
+            File(
+                // getExternalCacheDir() gives external storage capacity (safe for large archives)
+                // with cache semantics (OS/user can clear it). Falls back to internal cacheDir
+                // on devices without external storage.
+                getExternalCacheDir() ?: cacheDir,
+                "cleanOnExit"
+            ).apply { mkdirs() }
+        )
+
+    val textEditorManager: TextEditorManager by lazy { TextEditorManager().also { setupTextMate() } }
+    val mainActivityManager: MainActivityManager by lazy { MainActivityManager().also { it.setup() } }
+    val preferencesManager: PreferencesManager by lazy { PreferencesManager() }
+    val viewersManager: ViewersManager by lazy {
+        setupTextMate()
+        ViewersManager()
+    }
+    val taskManager: TaskManager by lazy { TaskManager() }
+    val zipManager: ZipManager by lazy { ZipManager() }
+    val searchManager: SearchManager by lazy { SearchManager() }
+
+    override fun onCreate() {
+        super.onCreate()
+
+        // androidx.pdf spawns a sandboxed :androidx.pdf.service.PdfDocumentServiceImpl process
+        // which also triggers App.onCreate(). In that isolated process StorageManager is unavailable,
+        // so we skip all main-process initialization here to avoid a NullPointerException.
+        if (isRemoteServiceProcess()) return
+
+        logger = FileExplorerLogger(this, applicationScope)
+        setupGlobalExceptionHandler()
+        SftpRemoteClient.ensureBouncyCastle()
+
+        appContext = this
+
+        migrateLegacyAppDirectory()
+        cleanOnExitDir()
+        MlKitInitializer.initialize(this)
+        initRecycleBinCleanup()
+    }
+
+    /**
+     * Copies upstream shared data into a verified ZenLabs directory without deleting the source.
+     * The operation runs off the main thread and the source remains usable if it fails.
+     */
+    private fun migrateLegacyAppDirectory() {
+        val storageRoot = Environment.getExternalStorageDirectory()
+        val legacyDirectory = File(storageRoot, BrandCompatibility.LEGACY_PRISM_APP_DIRECTORY)
+        val zenLabsDirectory = File(storageRoot, BrandCompatibility.ZENLABS_APP_DIRECTORY)
+        if (!legacyDirectory.isDirectory) return
+
+        applicationScope.launch {
+            val result = BrandMigration.migrate(legacyDirectory, zenLabsDirectory)
+            when (result.status) {
+                BrandMigrationResult.Status.MIGRATED ->
+                    logger.logInfo("Migrated ${result.copiedFiles} legacy app files to ${result.targetDirectory.name}")
+                BrandMigrationResult.Status.FAILED ->
+                    logger.logError("Legacy app-data migration failed: ${result.error}")
+                else -> Unit
+            }
+        }
+    }
+
+    private fun initRecycleBinCleanup() {
+        if (preferencesManager.autoEmptyRecycleBin) {
+            RecycleBinManager.schedulePeriodicCleanup(this)
+            applicationScope.launch(Dispatchers.IO) {
+                RecycleBinManager.purgeExpiredFiles(preferencesManager.recycleBinRetentionDays)
+            }
+        }
+    }
+
+    /**
+     * Returns true when the App is being initialized inside a remote service process
+     * (e.g. androidx.pdf's PdfDocumentServiceImpl) rather than the main app process.
+     *
+     * Uses /proc/self/cmdline which is always readable — even inside fully-isolated
+     * sandboxed processes where ActivityManager.getRunningAppProcesses() returns null.
+     */
+    private fun isRemoteServiceProcess(): Boolean {
+        return try {
+            val cmdline = java.io.File("/proc/self/cmdline")
+                .readBytes()
+                .takeWhile { it != 0.toByte() }   // cmdline is null-terminated
+                .toByteArray()
+                .toString(Charsets.UTF_8)
+                .trim()
+            cmdline != packageName
+        } catch (e: Exception) {
+            // If we can't read the process name assume it's the main process
+            false
+        }
+    }
+
+
+
+    fun cleanOnExitDir() {
+        applicationScope.launch {
+            if (cleanOnExitDir.file.exists()) {
+                cleanOnExitDir.file.deleteRecursively()
+            }
+        }
+    }
+
+    private fun setupGlobalExceptionHandler() {
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, exception ->
+            logger.logError(exception)
+            defaultHandler?.uncaughtException(thread, exception)
+            Process.killProcess(Process.myPid())
+            exitProcess(2)
+        }
+    }
+
+    private fun setupTextMate() {
+        applicationScope.launch {
+            try {
+                val zipResolver = com.zenlabs.filemanager.screen.textEditor.language.ZipFileResolver.getInstance(appContext)
+                if (zipResolver != null) {
+                    FileProviderRegistry.getInstance().addFileProvider(zipResolver)
+                } else {
+                    FileProviderRegistry.getInstance().addFileProvider(
+                        AssetsFileResolver(
+                            appContext.assets
+                        )
+                    )
+                }
+
+                GrammarRegistry.getInstance().loadGrammars("textmate/languages.json")
+
+                val themeRegistry = ThemeRegistry.getInstance()
+
+                fun loadThemeSafe(assetPath: String, name: String) {
+                    try {
+                        val stream = FileProviderRegistry.getInstance().tryGetInputStream(assetPath) ?: return
+                        themeRegistry.loadTheme(
+                            ThemeModel(
+                                IThemeSource.fromInputStream(stream, assetPath, null),
+                                name
+                            )
+                        )
+                    } catch (e: Exception) {
+                        logger.logError(e)
+                    }
+                }
+
+                loadThemeSafe("textmate/darcula.json", "darcula")
+                loadThemeSafe("textmate/quietlight.json", "quietlight")
+                loadThemeSafe("textmate/dark.json", "dark")
+                loadThemeSafe("textmate/light.tmTheme", "light")
+                loadThemeSafe("textmate/black/darcula.json", "black_darcula")
+
+                KeywordManager.initKeywordRegistry(appContext)
+            } catch (e: Exception) {
+                logger.logError(e)
+            }
+        }
+    }
+
+    fun showMsg(@StringRes msgSrc: Int) {
+        showMsg(getString(msgSrc))
+    }
+
+    fun showMsg(msg: String) {
+        CoroutineScope(Dispatchers.Main).launch {
+            Toast.makeText(this@App, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+
+    fun generateUid() = uid.andIncrement
+
+    override fun newImageLoader(context: PlatformContext): ImageLoader {
+        return ImageLoader(context)
+            .newBuilder()
+            .addLastModifiedToFileCacheKey(true)
+            .crossfade(true)
+            .allowConversionToBitmap(true)
+            .coroutineContext(Dispatchers.Default)
+            .interceptorCoroutineContext(Dispatchers.Default)
+            .bitmapFactoryMaxParallelism(1)
+            .memoryCache {
+                MemoryCache.Builder()
+                    .maxSizePercent(context, 0.35)
+                    .build()
+            }
+            .diskCachePolicy(CachePolicy.ENABLED)
+            .components {
+                add(DocumentFileMapper())
+                add(GifDecoder.Factory())
+                add(SvgDecoder.Factory())
+                add(VideoFrameDecoder.Factory())
+                add(ApkFileDecoder.Factory())
+                add(PdfFileDecoder.Factory())
+                add(OfficeFileDecoder.Factory())
+                add(ComicCoverDecoder.Factory())
+                add(EpubCoverDecoder.Factory())
+                add(AudioFileDecoder.Factory())
+                add(ZipFileFetcher.Factory())
+                add(ZipFileKeyer())
+            }
+            .build()
+    }
+}

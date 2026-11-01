@@ -1,0 +1,470 @@
+package com.zenlabs.filemanager.screen.main.tab.files.holder
+
+import android.content.Context
+import com.zenlabs.filemanager.App.Companion.globalClass
+import com.zenlabs.filemanager.App.Companion.logger
+import com.zenlabs.filemanager.R
+import com.zenlabs.filemanager.common.emptyString
+import com.zenlabs.filemanager.common.showMsg
+import com.zenlabs.filemanager.common.toFormattedDate
+import com.zenlabs.filemanager.common.toFormattedSize
+import com.zenlabs.filemanager.common.toUuid
+import com.zenlabs.filemanager.screen.main.tab.files.FilesTab
+import com.zenlabs.filemanager.screen.main.tab.files.misc.ContentCount
+import com.zenlabs.filemanager.screen.main.tab.files.zip.ArchiveManager
+import com.zenlabs.filemanager.screen.main.tab.files.zip.ZipTree
+import com.zenlabs.filemanager.screen.main.tab.files.zip.model.ZipNode
+import kotlinx.coroutines.runBlocking
+import net.lingala.zip4j.ZipFile
+import net.lingala.zip4j.model.ZipParameters
+import java.io.ByteArrayInputStream
+import java.io.File
+
+import android.content.Intent
+import com.zenlabs.filemanager.screen.main.tab.files.misc.FileMimeType
+import com.zenlabs.filemanager.screen.viewer.archive.ArchiveMediaItem
+import com.zenlabs.filemanager.screen.viewer.archive.ArchiveMediaQueueManager
+import com.zenlabs.filemanager.screen.viewer.archive.ArchiveMediaSession
+import com.zenlabs.filemanager.screen.viewer.audio.AudioPlayerActivity
+import com.zenlabs.filemanager.screen.viewer.image.ImageViewerActivity
+import com.zenlabs.filemanager.screen.viewer.video.VideoPlayerActivity
+
+class ZipFileHolder(
+    val zipTree: ZipTree,
+    val node: ZipNode,
+) : ContentHolder() {
+    override val uniquePath = node.path
+    override val displayName = node.name
+    var details = emptyString
+
+    override val isFolder = node.isDirectory
+    override val lastModified = node.lastModified
+    override val size = node.size
+    override val extension = node.extension
+    override val canRead = true
+    override val canWrite: Boolean
+        get() = ArchiveManager.isModifiableArchive(zipTree.source.displayName)
+    override val canAddNewContent: Boolean
+        get() = canWrite
+
+    private var filesCount = 0
+    private var foldersCount = 0
+
+    private var contentListCount = ContentCount()
+
+    override suspend fun getDetails(): String {
+        if (details.isNotEmpty()) return details
+
+        return createDetails().also {
+            details = it
+        }
+    }
+
+    override suspend fun listContent(): ArrayList<ZipFileHolder> {
+        android.util.Log.d("ZenLabsArchive", "ZipFileHolder: listContent() started for path='$uniquePath', isReady=${zipTree.isReady}")
+        filesCount = 0
+        foldersCount = 0
+
+        if (!zipTree.isReady) {
+            try {
+                android.util.Log.d("ZenLabsArchive", "ZipFileHolder: zipTree is not ready. Preparing tree...")
+                zipTree.prepare()
+                android.util.Log.d("ZenLabsArchive", "ZipFileHolder: zipTree preparation completed.")
+            } catch (e: ZipTree.ArchivePasswordRequiredException) {
+                android.util.Log.w("ZenLabsArchive", "ZipFileHolder: Caught ArchivePasswordRequiredException for ${e.archiveName}. Showing password dialog...")
+                val tab = globalClass.mainActivityManager.getActiveTab()
+                        as? com.zenlabs.filemanager.screen.main.tab.files.FilesTab
+                tab?.toggleArchivePasswordDialog(zipTree.source)
+                return arrayListOf()
+            } catch (e: Exception) {
+                android.util.Log.e("ZenLabsArchive", "ZipFileHolder: Error preparing zipTree: ${e.message}", e)
+                return arrayListOf()
+            }
+        }
+
+        // In case the tab reloaded with new content, the `node` linked to this holder will have the
+        // old data, so we need to make sure that the content is up-to-date.
+        // This also somewhat apply to the LocalFileHolder, but that get the information of a 'File'
+        // which will show latest changes (except the cached stuff).
+        val newNode = zipTree.findNodeByPath(uniquePath)
+
+        if (newNode == null) {
+            android.util.Log.w("ZenLabsArchive", "ZipFileHolder: Node not found in tree for path='$uniquePath'")
+            return arrayListOf()
+        }
+
+        val childrenList = newNode.children
+            .map {
+                ZipFileHolder(zipTree, it).also {
+                    if (it.node.isDirectory) foldersCount++ else filesCount++
+                }
+            }
+        
+        android.util.Log.d("ZenLabsArchive", "ZipFileHolder: listContent() finished. Found ${childrenList.size} children.")
+        return ArrayList(childrenList).also {
+            contentListCount = ContentCount(filesCount, foldersCount)
+        }
+    }
+
+    override suspend fun getParent(): ContentHolder? {
+        if (!node.path.contains(File.separator) && node.path.isNotEmpty()) {
+            return ZipFileHolder(zipTree, zipTree.getRootNode())
+        }
+
+        var parentPath = node.parentPath
+
+        while (parentPath.isNotEmpty()) {
+            val parentNode = zipTree.findNodeByPath(parentPath)
+
+            if (parentNode != null) {
+                return ZipFileHolder(zipTree, parentNode)
+            }
+
+            parentPath = ZipNode(emptyString, parentPath).parentPath
+        }
+
+        // We are at the root of this ZipTree.
+        // Check if this ZipTree is a nested archive.
+        val sourcePath = zipTree.source.uniquePath
+        val cleanOnExitPath = globalClass.cleanOnExitDir.uniquePath
+        if (sourcePath.startsWith(cleanOnExitPath)) {
+            val relativePath = sourcePath.removePrefix(cleanOnExitPath).trimStart('/')
+            val uuid = relativePath.substringBefore('/')
+            val internalPath = relativePath.substringAfter('/')
+
+            val parentTree = globalClass.zipManager.archiveList.values.find {
+                it.source.uniquePath.toUuid().toString() == uuid
+            }
+
+            if (parentTree != null) {
+                val parentNode = parentTree.findNodeByPath(internalPath)
+                if (parentNode != null) {
+                    return ZipFileHolder(parentTree, parentNode)
+                }
+            }
+        }
+
+        return zipTree.source.getParent()
+    }
+
+    override suspend fun createSubFile(name: String, onCreated: (ContentHolder?) -> Unit) {
+        lastCreationError = null
+        val path = "${if (uniquePath.isEmpty()) emptyString else "$uniquePath/"}$name"
+        val sourceFile = zipTree.source.file
+        val isNative = ArchiveManager.isNativeArchivePath(sourceFile.name) ||
+                ArchiveManager.isNativeArchive(sourceFile.extension)
+        var caughtError: Throwable? = null
+
+        if (isNative) {
+            try {
+                ArchiveManager.createEmptyEntry(
+                    archivePath = zipTree.archivePathForNative,
+                    internalPath = path,
+                    isDirectory = false,
+                    password = zipTree.password
+                )
+            } catch (e: Exception) {
+                caughtError = e
+                logger.logError(e)
+            }
+        } else {
+            try {
+                val params = ZipParameters().apply {
+                    fileNameInZip = path
+                    isOverrideExistingFilesInZip = false
+                }
+
+                ZipFile(zipTree.source.file).use { zipFile ->
+                    zipFile.addStream(ByteArrayInputStream(ByteArray(0)), params)
+                }
+            } catch (e: Exception) {
+                caughtError = e
+                logger.logError(e)
+            }
+        }
+
+        zipTree.prepare()
+
+        zipTree.findNodeByPath(path)?.let {
+            onCreated(ZipFileHolder(zipTree, it))
+        } ?: run {
+            lastCreationError = com.zenlabs.filemanager.common.FileOperationError.diagnosePathError(
+                targetFile = sourceFile,
+                isFolder = false,
+                throwable = caughtError
+            )
+            onCreated(null)
+        }
+    }
+
+    override suspend fun createSubFolder(name: String, onCreated: (ContentHolder?) -> Unit) {
+        lastCreationError = null
+        val path = "${if (uniquePath.isEmpty()) emptyString else "$uniquePath/"}$name"
+        val sourceFile = zipTree.source.file
+        val isNative = ArchiveManager.isNativeArchivePath(sourceFile.name) ||
+                ArchiveManager.isNativeArchive(sourceFile.extension)
+        var caughtError: Throwable? = null
+
+        if (isNative) {
+            try {
+                ArchiveManager.createEmptyEntry(
+                    archivePath = zipTree.archivePathForNative,
+                    internalPath = path,
+                    isDirectory = true,
+                    password = zipTree.password
+                )
+            } catch (e: Exception) {
+                caughtError = e
+                logger.logError(e)
+            }
+        } else {
+            try {
+                val params = ZipParameters().apply {
+                    fileNameInZip = "$path/"
+                    isOverrideExistingFilesInZip = false
+                }
+
+                ZipFile(zipTree.source.file).use { zipFile ->
+                    zipFile.addStream(ByteArrayInputStream(ByteArray(0)), params)
+                }
+            } catch (e: Exception) {
+                caughtError = e
+                logger.logError(e)
+            }
+        }
+
+        zipTree.prepare()
+
+        zipTree.findNodeByPath(path.trimEnd('/'))?.let {
+            onCreated(ZipFileHolder(zipTree, it))
+        } ?: run {
+            lastCreationError = com.zenlabs.filemanager.common.FileOperationError.diagnosePathError(
+                targetFile = sourceFile,
+                isFolder = true,
+                throwable = caughtError
+            )
+            onCreated(null)
+        }
+    }
+
+    override suspend fun getContentCount() = contentListCount
+
+    override suspend fun findFile(name: String) = node.children.find { it.name == name }?.let {
+        ZipFileHolder(zipTree, it)
+    }
+
+    override suspend fun isValid() = if (zipTree.isReady) {
+        (zipTree.source.isValid() && zipTree.findNodeByPath(uniquePath) != null).also { isValid ->
+            if (!isValid) globalClass.zipManager.validateArchiveTrees()
+        }
+    } else {
+        zipTree.source.isValid().also { isValid ->
+            if (!isValid) globalClass.zipManager.validateArchiveTrees()
+        }
+    }
+
+    override fun open(
+        context: Context,
+        anonymous: Boolean,
+        skipSupportedExtensions: Boolean,
+        customMimeType: String?
+    ) {
+        if (!skipSupportedExtensions && customMimeType == null) {
+            val isImage = FileMimeType.imageFileType.contains(extension)
+            val isAudio = FileMimeType.audioFileType.contains(extension)
+            val isVideo = FileMimeType.videoFileType.contains(extension)
+
+            if (isImage || isAudio || isVideo) {
+                val parentNode = if (node.parentPath.isEmpty()) zipTree.getRootNode() else zipTree.findNodeByPath(node.parentPath)
+                val siblings = parentNode?.children?.filter { child ->
+                    !child.isDirectory && when {
+                        isImage -> FileMimeType.imageFileType.contains(child.extension)
+                        isAudio -> FileMimeType.audioFileType.contains(child.extension)
+                        isVideo -> FileMimeType.videoFileType.contains(child.extension)
+                        else -> false
+                    }
+                }?.sortedBy { it.name.lowercase() } ?: listOf(node)
+
+                val sessionItems = siblings.map { s ->
+                    ArchiveMediaItem(
+                        internalPath = s.path,
+                        destinationPath = File(zipTree.createExtractionDestinationDirFor(s), s.name).absolutePath,
+                        name = s.name
+                    )
+                }
+                val initialIndex = siblings.indexOfFirst { it.path == node.path }.coerceAtLeast(0)
+                val session = ArchiveMediaQueueManager.createSession(
+                    archivePath = zipTree.archivePathForNative,
+                    password = zipTree.password,
+                    destinationDir = zipTree.cleanOnExitDir.uniquePath,
+                    items = sessionItems
+                )
+
+                val targetClass = when {
+                    isImage -> ImageViewerActivity::class.java.name
+                    isAudio -> AudioPlayerActivity::class.java.name
+                    else -> VideoPlayerActivity::class.java.name
+                }
+
+                val existingFile = zipTree.getExtractionDestinationFile(node)
+                if (existingFile != null) {
+                    launchArchiveMediaViewer(context, existingFile, session, initialIndex, targetClass)
+                } else {
+                    (globalClass.mainActivityManager.getActiveTab() as? FilesTab)?.extractZipHolderForPreview(
+                        this
+                    ) {
+                        val extracted = zipTree.getExtractionDestinationFile(node)
+                        if (extracted != null) {
+                            zipTree.addExtractedFile(node, extracted)
+                            launchArchiveMediaViewer(context, extracted, session, initialIndex, targetClass)
+                        } else {
+                            showMsg(R.string.failed_to_extract_file)
+                        }
+                    }
+                }
+                return
+            }
+        }
+
+        val file = zipTree.getExtractionDestinationFile(node)
+
+        if (file != null) {
+            file.open(context, anonymous, skipSupportedExtensions, customMimeType)
+        } else {
+            (globalClass.mainActivityManager.getActiveTab() as? FilesTab)?.extractZipHolderForPreview(
+                this
+            ) {
+                val file = zipTree.getExtractionDestinationFile(node)
+                if (file != null) {
+                    zipTree.addExtractedFile(node, file)
+                    file.open(context, anonymous, skipSupportedExtensions, customMimeType)
+                } else {
+                    showMsg(R.string.failed_to_extract_file)
+                }
+            }
+        }
+    }
+
+    private fun launchArchiveMediaViewer(
+        context: Context,
+        file: LocalFileHolder,
+        session: ArchiveMediaSession,
+        initialIndex: Int,
+        targetClass: String
+    ) {
+        val uri = file.createUri()
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, file.mimeType)
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK
+                        or Intent.FLAG_ACTIVITY_NEW_DOCUMENT
+                        or Intent.FLAG_ACTIVITY_MULTIPLE_TASK
+                        or Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            setPackage(context.packageName)
+            setClassName(context.packageName, targetClass)
+            putExtra("extra_file_path", file.file.absolutePath)
+            putExtra(ArchiveMediaQueueManager.EXTRA_ARCHIVE_SESSION_ID, session.sessionId)
+            putExtra(ArchiveMediaQueueManager.EXTRA_ARCHIVE_PATH, session.archivePath)
+            putExtra(ArchiveMediaQueueManager.EXTRA_ARCHIVE_PASSWORD, session.password)
+            putStringArrayListExtra(
+                ArchiveMediaQueueManager.EXTRA_ARCHIVE_INTERNAL_PATHS,
+                ArrayList(session.items.map { it.internalPath })
+            )
+            putStringArrayListExtra(
+                ArchiveMediaQueueManager.EXTRA_ARCHIVE_DEST_PATHS,
+                ArrayList(session.items.map { it.destinationPath })
+            )
+            putExtra(ArchiveMediaQueueManager.EXTRA_ARCHIVE_DEST_DIR, session.destinationDir)
+            putExtra(ArchiveMediaQueueManager.EXTRA_ARCHIVE_INITIAL_INDEX, initialIndex)
+            if (targetClass == ImageViewerActivity::class.java.name) {
+                putStringArrayListExtra(
+                    ImageViewerActivity.EXTRA_IMAGE_LIST,
+                    ArrayList(session.items.map { it.destinationPath })
+                )
+            }
+        }
+
+        if (intent.resolveActivity(globalClass.packageManager) != null) {
+            context.startActivity(intent)
+            ArchiveMediaQueueManager.prefetchWindow(session, initialIndex, 3)
+        } else {
+            file.open(context, false, false, null)
+        }
+    }
+
+    suspend fun extractForPreview(): String {
+        val destDir = zipTree.createExtractionDestinationDirFor(node).absolutePath
+        android.util.Log.d("ZenLabsArchive", "ZipFileHolder: extractForPreview() started for node='${node.path}', destDir='$destDir'")
+        try {
+            val sourceName = zipTree.source.file.name
+            val ext = zipTree.source.extension.lowercase()
+            // Prefer lib7za for everything it supports (including compound tar.* and pure xz/bz2/zst)
+            if (ArchiveManager.isNativeArchivePath(sourceName) || ArchiveManager.isNativeArchive(ext)) {
+                android.util.Log.d("ZenLabsArchive", "ZipFileHolder: Native archive type detected. Extracting via 7za...")
+                ArchiveManager.extractSingleFile(
+                    archivePath = zipTree.archivePathForNative,
+                    internalPath = node.path,
+                    destinationDir = zipTree.cleanOnExitDir.uniquePath,
+                    password = zipTree.password
+                )
+            } else {
+                android.util.Log.d("ZenLabsArchive", "ZipFileHolder: ZIP archive type detected. Extracting via zip4j...")
+                val zipFile = if (!zipTree.password.isNullOrEmpty()) {
+                    net.lingala.zip4j.ZipFile(zipTree.tempArchiveFile, zipTree.password!!.toCharArray())
+                } else {
+                    net.lingala.zip4j.ZipFile(zipTree.tempArchiveFile)
+                }
+                zipFile.use { zf ->
+                    zf.extractFile(
+                        node.path,
+                        zipTree.cleanOnExitDir.uniquePath
+                    )
+                }
+            }
+            android.util.Log.d("ZenLabsArchive", "ZipFileHolder: extractForPreview() completed successfully.")
+        } catch (e: Exception) {
+            android.util.Log.e("ZenLabsArchive", "ZipFileHolder: extractForPreview() failed: ${e.message}", e)
+            logger.logError(e)
+        }
+        return destDir
+    }
+
+    private suspend fun createDetails(): String {
+        // Right side: date formatted as DD/MM/YY • HH:MM
+        val rightSide = lastModified.toFormattedDate()
+
+        val prefs = globalClass.preferencesManager
+        val leftSide = if (node.isDirectory) {
+            if (prefs.showFolderContentCount) {
+                val count = getFormattedIconCount()
+                count
+            } else ""
+        } else {
+            val sizeStr = node.size.toFormattedSize()
+            if (prefs.hideFileExtensions && node.extension.isNotEmpty()) {
+                "$sizeStr • ${node.extension.uppercase()}"
+            } else sizeStr
+        }
+
+        return if (leftSide.isNotEmpty()) "$leftSide\t $rightSide" else "\t$rightSide"
+    }
+
+    private suspend fun getFormattedIconCount(): String {
+        if (filesCount == 0 && foldersCount == 0) {
+            runBlocking {
+                listContent()
+            }
+        }
+
+        return buildString {
+            if (foldersCount > 0) {
+                append("$foldersCount folders")
+                if (filesCount > 0) append(" • ")
+            }
+            if (filesCount > 0) append("$filesCount files")
+            if (foldersCount == 0 && filesCount == 0) append("Ø")
+        }
+    }
+}

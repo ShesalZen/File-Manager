@@ -1,0 +1,612 @@
+package com.zenlabs.filemanager.screen.viewer.audio
+
+import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
+import android.media.audiofx.AudioEffect
+import android.net.Uri
+import android.provider.Settings
+import android.widget.Toast
+import androidx.annotation.OptIn
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
+import androidx.media3.common.C.TIME_UNSET
+import com.zenlabs.filemanager.common.findActivity
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import com.zenlabs.filemanager.App.Companion.globalClass
+import com.zenlabs.filemanager.App.Companion.logger
+import com.zenlabs.filemanager.R
+import com.zenlabs.filemanager.common.isNot
+import com.zenlabs.filemanager.screen.viewer.ViewerInstance
+import com.zenlabs.filemanager.screen.viewer.audio.model.AudioMetadata
+import com.zenlabs.filemanager.screen.viewer.audio.model.AudioPlayerColorScheme
+import com.zenlabs.filemanager.screen.viewer.audio.model.PlayerState
+import com.zenlabs.filemanager.screen.viewer.audio.ui.extractColorsFromBitmap
+import com.zenlabs.filemanager.screen.viewer.media.MediaNotificationHelper
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+import com.zenlabs.filemanager.screen.viewer.archive.ArchiveMediaQueueManager
+import com.zenlabs.filemanager.screen.viewer.archive.ArchiveMediaSession
+import java.io.File
+
+class AudioPlayerInstance(
+    override val uri: Uri,
+    override val id: String,
+    val playlist: List<Uri> = listOf(),
+    val archiveSession: ArchiveMediaSession? = null
+) : ViewerInstance {
+    private val _playerState = MutableStateFlow(PlayerState())
+    val playerState: StateFlow<PlayerState> = _playerState.asStateFlow()
+
+    private val _metadata = MutableStateFlow(AudioMetadata())
+    val metadata: StateFlow<AudioMetadata> = _metadata.asStateFlow()
+
+    private val _isEqualizerVisible = MutableStateFlow(false)
+    val isEqualizerVisible: StateFlow<Boolean> = _isEqualizerVisible.asStateFlow()
+
+    private val _isVolumeVisible = MutableStateFlow(false)
+    val isVolumeVisible: StateFlow<Boolean> = _isVolumeVisible.asStateFlow()
+
+    private val _colorScheme = MutableStateFlow(AudioPlayerColorScheme())
+    val audioPlayerColorScheme: StateFlow<AudioPlayerColorScheme> = _colorScheme.asStateFlow()
+
+    private val _isSleepTimerVisible = MutableStateFlow(false)
+    val isSleepTimerVisible: StateFlow<Boolean> = _isSleepTimerVisible.asStateFlow()
+
+    private var defaultColorScheme: AudioPlayerColorScheme = AudioPlayerColorScheme()
+    private var exoPlayer: ExoPlayer? = null
+    private var appContext: Context? = null
+    private var activeAudioSessionId: Int = C.AUDIO_SESSION_ID_UNSET
+    private var positionTrackingJob: Job? = null
+    private var sleepTimerJob: Job? = null
+    private var mediaNotificationHelper: MediaNotificationHelper? = null
+
+    @OptIn(UnstableApi::class)
+    suspend fun initializePlayer(context: Context, uri: Uri) {
+        appContext = context.applicationContext
+        withContext(Dispatchers.Main) {
+            val audioAttributes = AudioAttributes.Builder()
+                .setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                .build()
+
+            exoPlayer = ExoPlayer.Builder(context)
+                .setAudioAttributes(audioAttributes, true)
+                .build().apply {
+                repeatMode = _playerState.value.repeatMode
+                // Add all playlist items (or just the single uri)
+                val uris = playlist.ifEmpty { listOf(uri) }
+                val mediaItems = uris.map { itemUri ->
+                    MediaItem.Builder().setUri(itemUri).build()
+                }
+                setMediaItems(mediaItems)
+
+                // Start from the item matching the originally-opened URI
+                val startIndex = uris.indexOfFirst { it == uri }.coerceAtLeast(0)
+                seekTo(startIndex, 0)
+
+                prepare()
+                playWhenReady = true
+
+                addListener(object : Player.Listener {
+                    override fun onAudioSessionIdChanged(audioSessionId: Int) {
+                        handleAudioSessionIdChanged(context, audioSessionId)
+                    }
+
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        _playerState.update {
+                            it.copy(isPlaying = isPlaying)
+                        }
+                        updateNotification()
+                    }
+
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        _playerState.update {
+                            it.copy(
+                                isLoading = playbackState == Player.STATE_BUFFERING
+                            )
+                        }
+
+                        if (playbackState == Player.STATE_READY) {
+                            _playerState.update {
+                                it.copy(
+                                    duration = duration.takeIf { d -> d isNot TIME_UNSET } ?: 0L
+                                )
+                            }
+                        }
+                    }
+
+                    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                        val player = exoPlayer ?: return
+                        val currentIndex = player.currentMediaItemIndex
+                        val currentUri = mediaItem?.localConfiguration?.uri ?: uris.getOrNull(currentIndex) ?: uri
+                        _playerState.update {
+                            it.copy(
+                                currentTrackIndex = currentIndex,
+                                totalTracks = player.mediaItemCount,
+                                currentPosition = 0L,
+                                duration = player.duration.takeIf { d -> d isNot TIME_UNSET } ?: 0L
+                            )
+                        }
+                        updateNotification()
+                        CoroutineScope(Dispatchers.IO).launch {
+                            extractMetadata(context, currentUri)
+                        }
+                        archiveSession?.let { session ->
+                            ArchiveMediaQueueManager.prefetchWindow(session, currentIndex, windowSize = 2)
+                        }
+                    }
+
+                    override fun onMediaMetadataChanged(mediaMetadata: androidx.media3.common.MediaMetadata) {
+                        val title = mediaMetadata.title?.toString()
+                        val artist = mediaMetadata.artist?.toString()
+                        val album = mediaMetadata.albumTitle?.toString()
+                        val artworkData = mediaMetadata.artworkData
+                        if (!title.isNullOrBlank()) {
+                            val art = artworkData?.let { data ->
+                                runCatching { BitmapFactory.decodeByteArray(data, 0, data.size) }.getOrNull()
+                            }
+                            _metadata.update { current ->
+                                current.copy(
+                                    title = title,
+                                    artist = artist ?: current.artist,
+                                    album = album ?: current.album,
+                                    albumArt = art ?: current.albumArt
+                                )
+                            }
+                            art?.let { bitmap ->
+                                val colorScheme = extractColorsFromBitmap(bitmap, defaultColorScheme)
+                                _colorScheme.value = colorScheme
+                            }
+                            updateNotification()
+                        }
+                    }
+                })
+            }
+
+            val initialSessionId = exoPlayer?.audioSessionId ?: C.AUDIO_SESSION_ID_UNSET
+            if (initialSessionId != C.AUDIO_SESSION_ID_UNSET) {
+                handleAudioSessionIdChanged(context, initialSessionId)
+            }
+        }
+
+        mediaNotificationHelper = MediaNotificationHelper(
+            context = context,
+            sessionTag = "ZenLabsAudio",
+            notificationId = 1001,
+            targetActivityClass = AudioPlayerActivity::class.java,
+            initialUri = uri,
+            instanceId = id,
+            onPlayPause = { playPause() },
+            onNext = { skipNext() },
+            onPrevious = { skipPrevious() },
+            onSeekTo = { pos -> seekTo(pos) },
+            onStop = {
+                exoPlayer?.stop()
+                _playerState.update { it.copy(isPlaying = false) }
+            }
+        )
+
+        extractMetadata(context, uri)
+        startPositionTracking()
+        updateNotification()
+    }
+
+    fun setDefaultColorScheme(colorScheme: AudioPlayerColorScheme) {
+        defaultColorScheme = colorScheme
+        _colorScheme.value = colorScheme
+    }
+
+    private suspend fun extractMetadata(context: Context, uri: Uri) {
+        withContext(Dispatchers.IO) {
+            val retriever = MediaMetadataRetriever()
+            try {
+                val filePath = resolveLocalPath(context, uri)
+                if (!filePath.isNullOrEmpty() && File(filePath).exists()) {
+                    retriever.setDataSource(filePath)
+                } else if (uri.scheme == "file") {
+                    val p = uri.path
+                    if (p != null) retriever.setDataSource(p) else retriever.setDataSource(context, uri)
+                } else if (uri.scheme == "content") {
+                    try {
+                        context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                            retriever.setDataSource(pfd.fileDescriptor)
+                        } ?: retriever.setDataSource(context, uri)
+                    } catch (_: Exception) {
+                        retriever.setDataSource(context, uri)
+                    }
+                } else {
+                    retriever.setDataSource(context, uri)
+                }
+
+                val title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
+                    ?.takeIf { it.isNotBlank() }
+                    ?: getFallbackTitle(uri)
+                val artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+                    ?: ""
+                val album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
+                    ?: ""
+                val durationStr =
+                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                val duration = durationStr?.toLongOrNull() ?: 0L
+
+                // Extract album art
+                val albumArtData = retriever.embeddedPicture
+                val albumArt = albumArtData?.let { data ->
+                    runCatching { BitmapFactory.decodeByteArray(data, 0, data.size) }.getOrNull()
+                }
+
+                val metadata = AudioMetadata(
+                    title = title,
+                    artist = artist,
+                    album = album,
+                    duration = duration,
+                    albumArt = albumArt
+                )
+
+                _metadata.value = metadata
+
+                // Extract colors from album art if available, otherwise revert to default
+                if (albumArt != null) {
+                    val colorScheme = extractColorsFromBitmap(albumArt, defaultColorScheme)
+                    _colorScheme.value = colorScheme
+                } else {
+                    _colorScheme.value = defaultColorScheme
+                }
+            } catch (e: Exception) {
+                logger.logError(e)
+                // Fallback metadata
+                _metadata.value = AudioMetadata(
+                    title = getFallbackTitle(uri)
+                )
+                _colorScheme.value = defaultColorScheme
+            } finally {
+                runCatching { retriever.release() }
+                withContext(Dispatchers.Main) {
+                    updateNotification()
+                }
+            }
+        }
+    }
+
+    private fun getFallbackTitle(uri: Uri): String {
+        val rawName = if (uri.scheme == "file") {
+            uri.path?.let { File(it).name }
+        } else {
+            uri.lastPathSegment
+        }
+        val decoded = rawName?.let { Uri.decode(it) } ?: globalClass.getString(R.string.unknown_title)
+        return decoded.substringBeforeLast('.').ifBlank { decoded }
+    }
+
+    private fun resolveLocalPath(context: Context, uri: Uri): String? {
+        if (uri.scheme == "file") {
+            return uri.path
+        }
+        if (uri.scheme == "content") {
+            try {
+                context.contentResolver.query(uri, arrayOf("_data"), null, null, null)?.use { cursor ->
+                    val pathIndex = cursor.getColumnIndex("_data")
+                    if (pathIndex >= 0 && cursor.moveToFirst()) {
+                        val path = cursor.getString(pathIndex)
+                        if (!path.isNullOrEmpty() && File(path).exists()) {
+                            return path
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+
+            val uriPath = uri.path ?: return null
+            val externalStorage = android.os.Environment.getExternalStorageDirectory().absolutePath
+            val prefixMappings = listOf(
+                "/storage_root/" to "",
+                "/root_path/" to "",
+                "/package_root/" to externalStorage,
+                "/external_files_path/" to externalStorage,
+                "/external-path/" to externalStorage,
+                "/files/" to externalStorage,
+                "/storage/" to "/storage"
+            )
+            for ((prefix, basePath) in prefixMappings) {
+                val idx = uriPath.indexOf(prefix)
+                if (idx >= 0) {
+                    val relativePart = uriPath.substring(idx + prefix.length)
+                    val candidate = if (basePath.isEmpty()) {
+                        if (relativePart.startsWith("/")) relativePart else "/$relativePart"
+                    } else {
+                        "$basePath/$relativePart"
+                    }
+                    if (File(candidate).exists()) {
+                        return candidate
+                    }
+                }
+            }
+        }
+        return null
+    }
+
+    private fun startPositionTracking() {
+        positionTrackingJob?.cancel()
+        positionTrackingJob = CoroutineScope(Dispatchers.Main).launch {
+            while (true) {
+                exoPlayer?.let { player ->
+                    _playerState.update {
+                        it.copy(
+                            currentPosition = player.currentPosition,
+                            duration = player.duration.takeIf { d -> d isNot TIME_UNSET } ?: 0L
+                        )
+                    }
+                }
+                delay(100)
+            }
+        }
+    }
+
+    fun playPause() {
+        exoPlayer?.let { player ->
+            if (player.isPlaying) {
+                player.pause()
+            } else {
+                if (player.playbackState == Player.STATE_ENDED) {
+                    player.seekToDefaultPosition()
+                }
+                player.play()
+            }
+        }
+    }
+
+    fun seekTo(position: Long) {
+        exoPlayer?.seekTo(position)
+    }
+
+    fun skipNext() {
+        exoPlayer?.let { player ->
+            if (player.hasNextMediaItem()) {
+                player.seekToNextMediaItem()
+                player.play()
+            } else if (_playerState.value.repeatMode == Player.REPEAT_MODE_ALL && player.mediaItemCount > 0) {
+                player.seekTo(0, 0)
+                player.play()
+            }
+        }
+    }
+
+    fun skipPrevious() {
+        exoPlayer?.let { player ->
+            if (player.hasPreviousMediaItem()) {
+                player.seekToPreviousMediaItem()
+                player.play()
+            } else if (_playerState.value.repeatMode == Player.REPEAT_MODE_ALL && player.mediaItemCount > 0) {
+                player.seekTo(player.mediaItemCount - 1, 0)
+                player.play()
+            }
+        }
+    }
+
+    /**
+     * Jump directly to a specific track index in the playlist.
+     */
+    fun seekToTrack(index: Int) {
+        archiveSession?.let { session ->
+            ArchiveMediaQueueManager.prefetchWindow(session, index, windowSize = 2)
+        }
+        exoPlayer?.let { player ->
+            player.seekTo(index, 0)
+            player.play()
+        }
+    }
+
+    fun setPlaybackSpeed(speed: Float) {
+        exoPlayer?.setPlaybackSpeed(speed)
+        _playerState.update { it.copy(playbackSpeed = speed) }
+    }
+
+    fun toggleRepeatMode() {
+        val newMode = when (_playerState.value.repeatMode) {
+            Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+            Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+            else -> Player.REPEAT_MODE_OFF
+        }
+        exoPlayer?.repeatMode = newMode
+        _playerState.update { it.copy(repeatMode = newMode) }
+    }
+
+    fun setVolume(volume: Float) {
+        exoPlayer?.volume = volume
+        _playerState.update { it.copy(volume = volume) }
+    }
+
+    fun toggleEqualizer() {
+        _isEqualizerVisible.value = !_isEqualizerVisible.value
+    }
+
+    fun toggleVolume() {
+        _isVolumeVisible.value = !_isVolumeVisible.value
+    }
+
+    fun toggleSleepTimerPanel() {
+        _isSleepTimerVisible.value = !_isSleepTimerVisible.value
+    }
+
+    fun toggleShuffle() {
+        val newState = !_playerState.value.isShuffleEnabled
+        exoPlayer?.shuffleModeEnabled = newState
+        _playerState.update { it.copy(isShuffleEnabled = newState) }
+    }
+
+    fun startSleepTimer(durationMs: Long) {
+        sleepTimerJob?.cancel()
+        _playerState.update { it.copy(sleepTimerRemainingMs = durationMs) }
+        sleepTimerJob = CoroutineScope(Dispatchers.Main).launch {
+            var remaining = durationMs
+            while (remaining > 0) {
+                delay(1000L)
+                remaining -= 1000L
+                _playerState.update { it.copy(sleepTimerRemainingMs = remaining.coerceAtLeast(0L)) }
+            }
+            // Timer expired — pause playback
+            exoPlayer?.pause()
+            _playerState.update { it.copy(sleepTimerRemainingMs = 0L) }
+        }
+    }
+
+    fun cancelSleepTimer() {
+        sleepTimerJob?.cancel()
+        sleepTimerJob = null
+        _playerState.update { it.copy(sleepTimerRemainingMs = 0L) }
+    }
+
+    private fun updateNotification() {
+        val player = exoPlayer ?: return
+        val meta = _metadata.value
+        val state = _playerState.value
+        val title = meta.title.ifEmpty {
+            val curUri = playlist.getOrNull(state.currentTrackIndex) ?: uri
+            curUri.lastPathSegment ?: "Audio Track"
+        }
+        val hasPrev = playlist.size > 1 && (state.currentTrackIndex > 0 || state.repeatMode != Player.REPEAT_MODE_OFF)
+        val hasNext = playlist.size > 1 && (state.currentTrackIndex < playlist.lastIndex || state.repeatMode != Player.REPEAT_MODE_OFF)
+
+        mediaNotificationHelper?.update(
+            title = title,
+            artist = meta.artist.ifEmpty { null },
+            album = meta.album.ifEmpty { null },
+            albumArt = meta.albumArt,
+            isPlaying = state.isPlaying,
+            hasPrevious = hasPrev,
+            hasNext = hasNext,
+            positionMs = player.currentPosition,
+            durationMs = player.duration.takeIf { it isNot TIME_UNSET } ?: 0L
+        )
+    }
+
+    private fun handleAudioSessionIdChanged(context: Context, newSessionId: Int) {
+        if (newSessionId == activeAudioSessionId) return
+        if (activeAudioSessionId != C.AUDIO_SESSION_ID_UNSET) {
+            notifyAudioSessionClosed(context, activeAudioSessionId)
+        }
+        activeAudioSessionId = newSessionId
+        if (activeAudioSessionId != C.AUDIO_SESSION_ID_UNSET) {
+            notifyAudioSessionOpened(context, activeAudioSessionId)
+        }
+    }
+
+    private fun notifyAudioSessionOpened(context: Context, sessionId: Int) {
+        if (sessionId == C.AUDIO_SESSION_ID_UNSET) return
+        try {
+            val openIntent = Intent(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION).apply {
+                putExtra(AudioEffect.EXTRA_AUDIO_SESSION, sessionId)
+                putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.packageName)
+                putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_MUSIC)
+            }
+            context.sendBroadcast(openIntent)
+        } catch (e: Exception) {
+            logger.logError(e)
+        }
+    }
+
+    private fun notifyAudioSessionClosed(context: Context, sessionId: Int) {
+        if (sessionId == C.AUDIO_SESSION_ID_UNSET) return
+        try {
+            val closeIntent = Intent(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION).apply {
+                putExtra(AudioEffect.EXTRA_AUDIO_SESSION, sessionId)
+                putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.packageName)
+            }
+            context.sendBroadcast(closeIntent)
+        } catch (e: Exception) {
+            logger.logError(e)
+        }
+    }
+
+    fun openSystemEqualizer(context: Context) {
+        val sessionId = if (activeAudioSessionId != C.AUDIO_SESSION_ID_UNSET) {
+            activeAudioSessionId
+        } else {
+            exoPlayer?.audioSessionId ?: C.AUDIO_SESSION_ID_UNSET
+        }
+
+        val intent = Intent(AudioEffect.ACTION_DISPLAY_AUDIO_EFFECT_CONTROL_PANEL).apply {
+            if (sessionId != C.AUDIO_SESSION_ID_UNSET) {
+                putExtra(AudioEffect.EXTRA_AUDIO_SESSION, sessionId)
+            }
+            putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.packageName)
+            putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_MUSIC)
+        }
+
+        val activity = context.findActivity()
+        val targetContext = activity ?: context
+        if (targetContext !is Activity) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        try {
+            targetContext.startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            try {
+                val soundSettingsIntent = Intent(Settings.ACTION_SOUND_SETTINGS).apply {
+                    if (targetContext !is Activity) {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                }
+                targetContext.startActivity(soundSettingsIntent)
+                Toast.makeText(
+                    targetContext,
+                    targetContext.getString(R.string.no_direct_equalizer_opening_sound_settings),
+                    Toast.LENGTH_SHORT
+                ).show()
+            } catch (_: Exception) {
+                Toast.makeText(
+                    targetContext,
+                    targetContext.getString(R.string.no_equalizer_found),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        } catch (e: Exception) {
+            logger.logError(e)
+            Toast.makeText(
+                targetContext,
+                targetContext.getString(R.string.no_equalizer_found),
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    fun getAudioSessionId(): Int {
+        return if (activeAudioSessionId != C.AUDIO_SESSION_ID_UNSET) {
+            activeAudioSessionId
+        } else {
+            exoPlayer?.audioSessionId ?: C.AUDIO_SESSION_ID_UNSET
+        }
+    }
+
+    override fun onClose() {
+        if (activeAudioSessionId != C.AUDIO_SESSION_ID_UNSET) {
+            appContext?.let { ctx ->
+                notifyAudioSessionClosed(ctx, activeAudioSessionId)
+            }
+            activeAudioSessionId = C.AUDIO_SESSION_ID_UNSET
+        }
+        appContext = null
+        positionTrackingJob?.cancel()
+        sleepTimerJob?.cancel()
+        mediaNotificationHelper?.release()
+        mediaNotificationHelper = null
+        exoPlayer?.release()
+        exoPlayer = null
+    }
+}

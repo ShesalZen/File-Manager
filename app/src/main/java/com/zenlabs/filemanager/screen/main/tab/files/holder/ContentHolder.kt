@@ -1,0 +1,213 @@
+package com.zenlabs.filemanager.screen.main.tab.files.holder
+
+import android.content.Context
+import com.zenlabs.filemanager.App.Companion.globalClass
+import com.zenlabs.filemanager.R
+import com.zenlabs.filemanager.common.StorageCapability
+import com.zenlabs.filemanager.common.emptyString
+import com.zenlabs.filemanager.common.toFormattedDate
+import com.zenlabs.filemanager.screen.main.tab.files.misc.ContentCount
+import com.zenlabs.filemanager.screen.main.tab.files.misc.FileMimeType.apkFileType
+import com.zenlabs.filemanager.screen.main.tab.files.misc.FileMimeType.apkBundleFileType
+import com.zenlabs.filemanager.screen.main.tab.files.misc.SortingMethod.SORT_BY_DATE
+import com.zenlabs.filemanager.screen.main.tab.files.misc.SortingMethod.SORT_BY_NAME
+import com.zenlabs.filemanager.screen.main.tab.files.misc.SortingMethod.SORT_BY_SIZE
+import com.zenlabs.filemanager.screen.main.tab.files.misc.SortingMethod.SORT_BY_TYPE
+import com.zenlabs.filemanager.screen.main.tab.files.misc.SortingMethod.SORT_BY_SHUFFLED
+import com.zenlabs.filemanager.screen.main.tab.files.misc.sortFoldersFirst
+import com.zenlabs.filemanager.screen.main.tab.files.misc.sortLargerFirst
+import com.zenlabs.filemanager.screen.main.tab.files.misc.sortName
+import com.zenlabs.filemanager.screen.main.tab.files.misc.sortNameRev
+import com.zenlabs.filemanager.screen.main.tab.files.misc.sortNewerFirst
+import com.zenlabs.filemanager.screen.main.tab.files.misc.sortOlderFirst
+import com.zenlabs.filemanager.screen.main.tab.files.misc.sortSmallerFirst
+import com.zenlabs.filemanager.screen.main.tab.files.misc.sortType
+import com.zenlabs.filemanager.screen.main.tab.files.misc.sortTypeRev
+
+/**
+ * Abstract class representing a content holder.
+ * This class provides common properties and methods for managing content.
+ */
+abstract class ContentHolder {
+    val uid = globalClass.generateUid()
+    abstract val uniquePath: String
+
+    abstract val displayName: String
+
+    abstract val isFolder: Boolean
+    abstract val lastModified: Long
+    abstract val size: Long
+    abstract val extension: String
+    abstract val canRead: Boolean
+    abstract val canWrite: Boolean
+
+    abstract val canAddNewContent: Boolean
+
+    /**
+     * Operations safely offered for this item. Concrete holders may narrow the set; UI actions
+     * should consult this instead of assuming that every backend has the same behavior.
+     */
+    open val capabilities: Set<StorageCapability>
+        get() = buildSet {
+            add(StorageCapability.LIST)
+            if (canRead) add(StorageCapability.READ)
+            if (canWrite) {
+                add(StorageCapability.WRITE)
+                add(StorageCapability.RENAME)
+                add(StorageCapability.MOVE)
+                add(StorageCapability.COPY)
+                add(StorageCapability.DELETE)
+            }
+            if (canAddNewContent) add(StorageCapability.CREATE)
+        }
+
+    fun supports(capability: StorageCapability): Boolean = capability in capabilities
+
+    open val isSymbolicLink: Boolean get() = false
+    open val isSymbolicLinkBroken: Boolean get() = false
+    open val symbolicLinkTarget: String? get() = null
+
+    /**
+     * Returns unsorted content list, use listSortedContent() to get sorted list.
+     */
+    abstract suspend fun listContent(): ArrayList<out ContentHolder>
+
+    abstract suspend fun getParent(): ContentHolder?
+
+    @Volatile
+    var lastCreationError: String? = null
+
+    open suspend fun createSubFile(name: String, onCreated: (ContentHolder?) -> Unit) {
+        lastCreationError = "Cannot create files in this location"
+        onCreated(null)
+    }
+
+    open suspend fun createSubFolder(name: String, onCreated: (ContentHolder?) -> Unit) {
+        lastCreationError = "Cannot create folders in this location"
+        onCreated(null)
+    }
+
+    abstract suspend fun getContentCount(): ContentCount
+    abstract suspend fun findFile(name: String): ContentHolder?
+
+    open suspend fun getDetails(): String {
+        return emptyString
+    }
+
+    /**
+     * Checks if the content holder is a valid content.
+     * For example, it might check if the underlying file or folder still exists on the file system.
+     *
+     * @return `true` if the content holder is valid, `false` otherwise.
+     */
+    abstract suspend fun isValid(): Boolean
+
+    open fun open(
+        context: Context,
+        anonymous: Boolean,
+        skipSupportedExtensions: Boolean,
+        customMimeType: String?
+    ) {
+    }
+
+    open fun isFile(): Boolean {
+        return !isFolder
+    }
+
+    open suspend fun hasParent(onlyReadable: Boolean = true): Boolean {
+        val parent = getParent()
+        return parent != null && parent.isValid() && (!onlyReadable || parent.canRead)
+    }
+
+    open suspend fun listSortedContent(): ArrayList<out ContentHolder> {
+        val sortingPrefs = globalClass.preferencesManager.getSortingPrefsFor(this)
+        val list = listContent()
+
+        if (!globalClass.preferencesManager.showHiddenFiles) {
+            list.removeIf { it.isHidden() }
+        }
+
+        return sortItemsWithPrefs(list, sortingPrefs)
+    }
+
+    companion object {
+        fun sortItemsWithPrefs(
+            items: List<ContentHolder>,
+            sortingPrefs: com.zenlabs.filemanager.screen.main.tab.files.misc.FileSortingPrefs
+        ): ArrayList<ContentHolder> {
+            val list = ArrayList(items)
+            if (sortingPrefs.sortMethod == SORT_BY_SHUFFLED) {
+                list.shuffle()
+                if (sortingPrefs.showFoldersFirst) {
+                    list.sortWith(Comparator { f1: ContentHolder, f2: ContentHolder ->
+                        if (f1.isFolder != f2.isFolder) {
+                            if (f1.isFolder) -1 else 1
+                        } else {
+                            0
+                        }
+                    })
+                }
+                return list
+            }
+
+            val primaryComparator = when (sortingPrefs.sortMethod) {
+                SORT_BY_NAME -> if (sortingPrefs.reverseSorting) sortNameRev else sortName
+                SORT_BY_DATE -> if (sortingPrefs.reverseSorting) sortOlderFirst else sortNewerFirst
+                SORT_BY_SIZE -> if (sortingPrefs.reverseSorting) sortLargerFirst else sortSmallerFirst
+                SORT_BY_TYPE -> if (sortingPrefs.reverseSorting) sortTypeRev else sortType
+                else -> if (sortingPrefs.reverseSorting) sortNameRev else sortName
+            }
+
+            val compositeComparator = if (sortingPrefs.showFoldersFirst) {
+                Comparator { f1: ContentHolder, f2: ContentHolder ->
+                    if (f1.isFolder != f2.isFolder) {
+                        if (f1.isFolder) -1 else 1
+                    } else {
+                        primaryComparator.compare(f1, f2)
+                    }
+                }
+            } else {
+                primaryComparator
+            }
+
+            list.sortWith(compositeComparator)
+            return list
+        }
+    }
+
+    fun isApk(): Boolean = extension == apkFileType
+
+    fun isApkBundle(): Boolean = apkBundleFileType.contains(extension.lowercase())
+
+    fun isHidden(): Boolean = displayName.startsWith(".")
+
+    suspend fun getFormattedFileCount(filesCount: Int, foldersCount: Int): String {
+        return buildString {
+            if (foldersCount == 0 && filesCount == 0) {
+                append("Ø")
+            } else {
+                if (foldersCount > 0) {
+                    append(
+                        globalClass.getString(
+                            R.string.folders_count,
+                            foldersCount
+                        )
+                    )
+                    if (filesCount > 0) append(", ")
+                }
+                if (filesCount > 0) {
+                    append(
+                        globalClass.getString(
+                            R.string.files_count,
+                            filesCount
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun getLastModifiedDate(): String {
+        return lastModified.toFormattedDate(hideSeconds = true)
+    }
+}

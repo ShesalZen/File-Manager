@@ -1,0 +1,23 @@
+*.iml
+.gradle
+.idea/
+.kotlin
+.DS_Store
+.cxx
+.externalNativeBuild
+**/build/
+**/.cxx
+**/.externalNativeBuild
+
+# Android & Local Config
+local.properties
+/captures
+
+
+# Logs & Debug Artifacts
+*.log
+perf_sandbox
+
+# Keystores
+*.jks
+*.keystore

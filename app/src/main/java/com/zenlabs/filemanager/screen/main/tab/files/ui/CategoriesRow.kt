@@ -1,0 +1,120 @@
+package com.zenlabs.filemanager.screen.main.tab.files.ui
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.PrimaryScrollableTabRow
+import androidx.compose.material3.Tab
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import com.zenlabs.filemanager.App.Companion.globalClass
+import com.zenlabs.filemanager.R
+import com.zenlabs.filemanager.common.limitLength
+import com.zenlabs.filemanager.screen.main.tab.files.FilesTab
+import com.zenlabs.filemanager.screen.main.tab.files.misc.SourceFolderResolver
+import java.io.File
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CategoriesRow(tab: FilesTab) {
+    val currentSelectedIndex = tab.selectedCategory?.let { tab.categories.indexOf(it) + 1 } ?: 0
+    var selectedIndex by remember(currentSelectedIndex) {
+        mutableIntStateOf(currentSelectedIndex)
+    }
+
+    var dragAccum by remember { mutableIntStateOf(0) }
+    PrimaryScrollableTabRow(
+        selectedTabIndex = selectedIndex,
+        edgePadding = 0.dp,
+        divider = {},
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+        modifier = Modifier.pointerInput(tab.categories.size, selectedIndex) {
+            if (globalClass.preferencesManager.disableNavigationGestures) return@pointerInput
+            detectHorizontalDragGestures(
+                onDragEnd = {
+                    val threshold = 80
+                    when {
+                        dragAccum < -threshold && selectedIndex < tab.categories.size -> {
+                            val next = selectedIndex + 1
+                            selectedIndex = next
+                            tab.selectedCategory = if (next == 0) null else tab.categories.getOrNull(next - 1)
+                            tab.reloadFiles()
+                        }
+                        dragAccum > threshold && selectedIndex > 0 -> {
+                            val prev = selectedIndex - 1
+                            selectedIndex = prev
+                            tab.selectedCategory = if (prev == 0) null else tab.categories.getOrNull(prev - 1)
+                            tab.reloadFiles()
+                        }
+                    }
+                    dragAccum = 0
+                },
+                onHorizontalDrag = { _, dragAmount ->
+                    dragAccum += dragAmount.toInt()
+                }
+            )
+        }
+    ) {
+        Tab(
+            selected = selectedIndex == 0,
+            onClick = {
+                selectedIndex = 0
+                tab.selectedCategory = null
+                tab.reloadFiles()
+            },
+            text = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.FolderOpen,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = if (selectedIndex == 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(text = stringResource(R.string.all))
+                }
+            }
+        )
+        tab.categories.forEach {
+            val sourceInfo = remember(it.data) {
+                (it.data as? File)?.let { file -> SourceFolderResolver.resolve(file) }
+            }
+            Tab(
+                selected = selectedIndex == tab.categories.indexOf(it) + 1,
+                onClick = {
+                    selectedIndex = tab.categories.indexOf(it) + 1
+                    tab.selectedCategory = it
+                    tab.reloadFiles()
+                },
+                text = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        if (sourceInfo != null) {
+                            SourceFolderIcon(sourceInfo = sourceInfo, size = 16.dp)
+                        }
+                        Text(text = it.name.limitLength(18))
+                    }
+                }
+            )
+        }
+    }
+}

@@ -1,0 +1,989 @@
+package com.zenlabs.filemanager.screen.preferences
+
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
+import com.zenlabs.filemanager.App.Companion.globalClass
+import com.zenlabs.filemanager.common.emptyString
+import com.zenlabs.filemanager.common.fromJson
+import com.zenlabs.filemanager.common.toJson
+import com.zenlabs.filemanager.screen.main.startup.StartupTabs
+import com.zenlabs.filemanager.screen.main.tab.files.holder.ContentHolder
+import com.zenlabs.filemanager.screen.main.tab.files.misc.DefaultOpeningMethods
+import com.zenlabs.filemanager.screen.main.tab.files.misc.OpeningMethod
+import com.zenlabs.filemanager.screen.main.tab.files.misc.RecentOpenWithApps
+import com.zenlabs.filemanager.screen.main.tab.files.misc.RecentOpenWithEntry
+import com.zenlabs.filemanager.screen.main.tab.files.misc.FileSortingPrefs
+import com.zenlabs.filemanager.screen.main.tab.files.misc.SortingMethod.SORT_BY_DATE
+import com.zenlabs.filemanager.screen.main.tab.files.misc.SortingMethod.SORT_BY_NAME
+import com.zenlabs.filemanager.screen.main.tab.files.misc.ViewConfigs
+import com.zenlabs.filemanager.screen.main.tab.files.misc.ViewType
+import com.zenlabs.filemanager.screen.main.tab.files.holder.VirtualFileHolder
+import com.zenlabs.filemanager.screen.main.tab.home.data.getDefaultHomeLayout
+import com.zenlabs.filemanager.screen.preferences.constant.DragDropAction
+import com.zenlabs.filemanager.screen.preferences.constant.FileItemSize
+import com.zenlabs.filemanager.screen.preferences.constant.TerminalAppPreference
+import com.zenlabs.filemanager.common.BrandCompatibility
+import com.zenlabs.filemanager.screen.preferences.constant.ThemePreference
+import com.zenlabs.filemanager.screen.preferences.misc.prefDataStore
+import com.zenlabs.filemanager.screen.preferences.misc.prefMutableState
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+
+class PreferencesManager {
+    val singleChoiceDialog = SingleChoiceDialog()
+
+    //---------- Onboarding -------------//
+    var hasShownOnboarding by prefMutableState(
+        keyName = "hasShownOnboarding",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var hasCompletedBatteryOptimizationPrompt by prefMutableState(
+        keyName = "hasCompletedBatteryOptimizationPrompt",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    //---------- Appearance -------------//
+    var theme by prefMutableState(
+        keyName = "theme",
+        defaultValue = ThemePreference.DARK.ordinal,
+        getPreferencesKey = { intPreferencesKey(it) }
+    )
+
+    var showBottomBarLabels by prefMutableState(
+        keyName = "showBottomBarLabels",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var enableBottomToolbar by prefMutableState(
+        keyName = "enableBottomToolbar",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var selectionRibbonTwoRows by prefMutableState(
+        keyName = "selectionRibbonTwoRows",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var selectionRibbonActions by prefMutableState(
+        keyName = "selectionRibbonActions",
+        defaultValue = "",
+        getPreferencesKey = { stringPreferencesKey(it) }
+    )
+
+    var homeTabLayout by prefMutableState(
+        keyName = "homeTabLayout",
+        defaultValue = getDefaultHomeLayout().toJson(),
+        getPreferencesKey = { stringPreferencesKey(it) }
+    )
+
+    var dateTimeFormat by prefMutableState(
+        keyName = "dateTimeFormat",
+        defaultValue = "dd/MM/yy • HH:mm",
+        getPreferencesKey = { stringPreferencesKey(it) }
+    )
+
+    var showPathBar by prefMutableState(
+        keyName = "showPathBar",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var hideHomeSearchBar by prefMutableState(
+        keyName = "hideHomeSearchBar",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var disableTabBar by prefMutableState(
+        keyName = "disableTabBar",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var hideToolbar by prefMutableState(
+        keyName = "hideToolbar",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var autoHideToolbars by prefMutableState(
+        keyName = "autoHideToolbars",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var autoHideToolbarsLandscape by prefMutableState(
+        keyName = "autoHideToolbarsLandscape",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var moveToolbarToBottom by prefMutableState(
+        keyName = "moveToolbarToBottom",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var moveTabsToBottom by prefMutableState(
+        keyName = "moveTabsToBottom",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var use12HourFormat by prefMutableState(
+        keyName = "use12HourFormat",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var showTabsInDrawer by prefMutableState(
+        keyName = "showTabsInDrawer",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var showBookmarksInDrawer by prefMutableState(
+        keyName = "showBookmarksInDrawer",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+
+    //---------- File List -------------//
+    var itemSize by prefMutableState(
+        keyName = "fileListSize",
+        defaultValue = FileItemSize.MEDIUM.ordinal,
+        getPreferencesKey = { intPreferencesKey(it) }
+    )
+
+    var showFolderContentCount by prefMutableState(
+        keyName = "showFolderContentCount",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var showDirectoryTypeFilterRibbon by prefMutableState(
+        keyName = "showDirectoryTypeFilterRibbon",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var deepEmptyFolderCheck by prefMutableState(
+        keyName = "deepEmptyFolderCheck",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var showHiddenFiles by prefMutableState(
+        keyName = "showHiddenFiles",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var hideFileExtensions by prefMutableState(
+        keyName = "hideFileExtensions",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var filenameEndCharsCount by prefMutableState(
+        keyName = "filenameEndCharsCount",
+        defaultValue = 0,
+        getPreferencesKey = { intPreferencesKey(it) }
+    )
+
+    // -1 means "same as portrait" (inherits filenameEndCharsCount)
+    var filenameEndCharsCountLandscape by prefMutableState(
+        keyName = "filenameEndCharsCountLandscape",
+        defaultValue = -1,
+        getPreferencesKey = { intPreferencesKey(it) }
+    )
+
+    var filenameMaxLines by prefMutableState(
+        keyName = "filenameMaxLines",
+        defaultValue = 1,
+        getPreferencesKey = { intPreferencesKey(it) }
+    )
+
+    var showFileListDivider by prefMutableState(
+        keyName = "showFileListDivider",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var showParentDirectoryEntry by prefMutableState(
+        keyName = "showParentDirectoryEntry",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var showSourceBadges by prefMutableState(
+        keyName = "showSourceBadges",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var folderScanForTint by prefMutableState(
+        keyName = "folderScanForTint",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var deepScanCategories by prefMutableState(
+        keyName = "deepScanCategories",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var sizeTintEnabled by prefMutableState(
+        keyName = "sizeTintEnabled",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    //---------- Behavior -------------//
+    var showFileOptionMenuOnLongClick by prefMutableState(
+        keyName = "showFileOptionMenuOnLongClick",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var dragDropAction by prefMutableState(
+        keyName = "dragDropAction",
+        defaultValue = DragDropAction.ASK.ordinal,
+        getPreferencesKey = { intPreferencesKey(it) }
+    )
+
+    var showVideoDuration by prefMutableState(
+        keyName = "showVideoDuration",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var disablePullDownToRefresh by prefMutableState(
+        keyName = "disablePullDownToRefresh",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var disableNavigationGestures by prefMutableState(
+        keyName = "disableNavigationGestures",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var disableSpringEffect by prefMutableState(
+        keyName = "disableSpringEffect",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var skipHomeWhenTabClosed by prefMutableState(
+        keyName = "skipHomeWhenTabClosed",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var closeTabOnBackPress by prefMutableState(
+        keyName = "closeTabOnBackPress",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var confirmBeforeAppClose by prefMutableState(
+        keyName = "confirmBeforeAppClose",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var rememberLastSession by prefMutableState(
+        keyName = "rememberLastSession",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var lastSessionTabs by prefMutableState(
+        keyName = "lastSessionTabs",
+        defaultValue = StartupTabs.default().toJson(),
+        getPreferencesKey = { stringPreferencesKey(it) }
+    )
+
+    var useBuiltInViewer by prefMutableState(
+        keyName = "useBuiltInViewer",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var autoHideVideoControls by prefMutableState(
+        keyName = "autoHideVideoControls",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var startupTabs by prefMutableState(
+        keyName = "startupTabs",
+        defaultValue = StartupTabs.default().toJson(),
+        getPreferencesKey = { stringPreferencesKey(it) }
+    )
+
+    var bookmarks by prefMutableState(
+        keyName = "bookmarks",
+        defaultValue = emptySet(),
+        getPreferencesKey = { stringSetPreferencesKey(it) }
+    )
+
+    // Stores the IDs of sidebar drawer sections that have been collapsed by the user.
+    var drawerCollapsedSections by prefMutableState(
+        keyName = "drawerCollapsedSections",
+        defaultValue = emptySet<String>(),
+        getPreferencesKey = { stringSetPreferencesKey(it) }
+    )
+
+    private var drawerSectionsOrderJson by prefMutableState(
+        keyName = "drawerSectionsOrderJson",
+        defaultValue = "",
+        getPreferencesKey = { stringPreferencesKey(it) }
+    )
+
+    var drawerSectionsOrder: List<String>
+        get() {
+            val defaultOrder = listOf("tabs", "bookmarks", "navigation", "storage", "tools", "remote")
+            if (drawerSectionsOrderJson.isEmpty()) return defaultOrder
+            val parsed = fromJson<List<String>>(drawerSectionsOrderJson) ?: return defaultOrder
+            return (parsed.filter { it in defaultOrder } + defaultOrder.filter { it !in parsed })
+        }
+        set(value) {
+            drawerSectionsOrderJson = value.toJson()
+        }
+
+    var drawerHiddenItems by prefMutableState(
+        keyName = "drawerHiddenItems",
+        defaultValue = emptySet<String>(),
+        getPreferencesKey = { stringSetPreferencesKey(it) }
+    )
+
+    var middleSwipeZoneWidthPercent by prefMutableState(
+        keyName = "middleSwipeZoneWidthPercent",
+        defaultValue = 33,
+        getPreferencesKey = { intPreferencesKey(it) }
+    )
+
+    private var pinnedFilesJson by prefMutableState(
+        keyName = "pinnedFilesJson",
+        defaultValue = "",
+        getPreferencesKey = { stringPreferencesKey(it) }
+    )
+
+    var pinnedFiles: List<String>
+        get() {
+            if (pinnedFilesJson.isEmpty()) {
+                val oldSetKey = stringSetPreferencesKey("pinnedFiles")
+                val oldSet = runBlocking {
+                    globalClass.prefDataStore.data.first()[oldSetKey]
+                }
+                if (oldSet != null) {
+                    val list = oldSet.toList()
+                    pinnedFilesJson = list.toJson()
+                    runBlocking {
+                        globalClass.prefDataStore.edit {
+                            it.remove(oldSetKey)
+                        }
+                    }
+                    return list
+                }
+                return emptyList()
+            }
+            return fromJson<List<String>>(pinnedFilesJson) ?: emptyList()
+        }
+        set(value) {
+            pinnedFilesJson = value.toJson()
+        }
+
+    private var pinnedFileNamesJson by prefMutableState(
+        keyName = "pinnedFileNamesJson",
+        defaultValue = "",
+        getPreferencesKey = { stringPreferencesKey(it) }
+    )
+    var pinnedFileNames: Map<String, String>
+        get() = fromJson<Map<String, String>>(pinnedFileNamesJson) ?: emptyMap()
+        set(value) {
+            pinnedFileNamesJson = value.toJson()
+        }
+
+    var hideRootStorage by prefMutableState(
+        keyName = "hideRootStorage",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var excludedPathsFromRecentFiles by prefMutableState(
+        keyName = "excludedPathFromRecentFiles",
+        defaultValue = emptySet(),
+        getPreferencesKey = { stringSetPreferencesKey(it) }
+    )
+
+    var removeHiddenPathsFromRecentFiles by prefMutableState(
+        keyName = "removeHiddenPathsFromRecentFiles",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var hideTempAndDbFilesFromRecentFiles by prefMutableState(
+        keyName = "hideTempAndDbFilesFromRecentFiles",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var showRecentInSidebar by prefMutableState(
+        keyName = "showRecentInSidebar",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var showRecentInCategories by prefMutableState(
+        keyName = "showRecentInCategories",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var disableRecentOnHomeTab by prefMutableState(
+        keyName = "disableRecentOnHomeTab",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var disabledHomeCategories by prefMutableState(
+        keyName = "disabledHomeCategories",
+        defaultValue = emptySet<String>(),
+        getPreferencesKey = { stringSetPreferencesKey(it) }
+    )
+
+    private var homeCategoriesOrderJson by prefMutableState(
+        keyName = "homeCategoriesOrderJson",
+        defaultValue = "",
+        getPreferencesKey = { stringPreferencesKey(it) }
+    )
+
+    var homeCategoriesOrder: List<String>
+        get() {
+            val defaultOrder = listOf("recent", "all_files", "images", "videos", "audios", "documents", "archives", "apk", "apps")
+            if (homeCategoriesOrderJson.isEmpty()) return defaultOrder
+            val parsed = fromJson<List<String>>(homeCategoriesOrderJson) ?: return defaultOrder
+            return (parsed.filter { it in defaultOrder } + defaultOrder.filter { it !in parsed })
+        }
+        set(value) {
+            homeCategoriesOrderJson = value.toJson()
+        }
+
+    //---------- File Operation -------------//
+    var autoRenameOnConflict by prefMutableState(
+        keyName = "autoRenameOnConflictV2",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var saveToZenLabsHistoryJson by prefMutableState(
+        keyName = BrandCompatibility.SAVE_LOCATION_HISTORY_PREFERENCE_KEY,
+        defaultValue = "[]",
+        getPreferencesKey = { stringPreferencesKey(it) }
+    )
+
+    var saveToZenLabsHistory: List<SaveLocationHistoryItem>
+        get() = fromJson<List<SaveLocationHistoryItem>>(saveToZenLabsHistoryJson) ?: emptyList()
+        set(value) {
+            saveToZenLabsHistoryJson = value.toJson()
+        }
+
+    fun addSaveLocationToHistory(path: String, title: String, isRemote: Boolean) {
+        val current = saveToZenLabsHistory.toMutableList()
+        current.removeAll { it.path == path }
+        current.add(0, SaveLocationHistoryItem(path = path, title = title, isRemote = isRemote))
+        saveToZenLabsHistory = if (current.size > 8) current.take(8) else current
+    }
+
+    fun clearSaveLocationHistory() {
+        saveToZenLabsHistory = emptyList()
+    }
+
+    var signMergedApkBundleFiles by prefMutableState(
+        keyName = "signMergedApkBundleFiles",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var moveToRecycleBin by prefMutableState(
+        keyName = "moveToRecycleBin",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var autoEmptyRecycleBin by prefMutableState(
+        keyName = "autoEmptyRecycleBin",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var recycleBinRetentionDays by prefMutableState(
+        keyName = "recycleBinRetentionDays",
+        defaultValue = 30,
+        getPreferencesKey = { intPreferencesKey(it) }
+    )
+
+
+    var defaultOpeningMethods by prefMutableState(
+        keyName = "defaultOpeningMethods",
+        defaultValue = DefaultOpeningMethods().toJson(),
+        getPreferencesKey = { stringPreferencesKey(it) }
+    )
+
+    fun getDefaultOpeningMethodsList(): List<OpeningMethod> {
+        val methods: DefaultOpeningMethods? = fromJson(defaultOpeningMethods)
+        return methods?.openingMethods ?: emptyList()
+    }
+
+    fun getDefaultOpeningMethod(extension: String): OpeningMethod? {
+        val ext = extension.lowercase().removePrefix(".")
+        return getDefaultOpeningMethodsList().firstOrNull {
+            it.extension.lowercase().removePrefix(".") == ext
+        }
+    }
+
+    fun hasDefaultOpeningMethod(extension: String): Boolean {
+        return getDefaultOpeningMethod(extension) != null
+    }
+
+    fun setDefaultOpeningMethod(extension: String, packageName: String, className: String) {
+        val ext = extension.lowercase().removePrefix(".")
+        val current = getDefaultOpeningMethodsList().filter {
+            it.extension.lowercase().removePrefix(".") != ext
+        }
+        val updated = current + OpeningMethod(
+            extension = ext,
+            packageName = packageName,
+            className = className
+        )
+        defaultOpeningMethods = DefaultOpeningMethods(updated).toJson()
+    }
+
+    fun clearDefaultOpeningMethod(extension: String) {
+        val ext = extension.lowercase().removePrefix(".")
+        val current = getDefaultOpeningMethodsList().filter {
+            it.extension.lowercase().removePrefix(".") != ext
+        }
+        defaultOpeningMethods = DefaultOpeningMethods(current).toJson()
+    }
+
+    fun clearAllDefaultOpeningMethods() {
+        defaultOpeningMethods = DefaultOpeningMethods(emptyList()).toJson()
+    }
+
+    var recentOpenWithApps by prefMutableState(
+        keyName = "recentOpenWithApps",
+        defaultValue = RecentOpenWithApps().toJson(),
+        getPreferencesKey = { stringPreferencesKey(it) }
+    )
+
+    /**
+     * Records [packageName]/[className] as the most-recently-used app for [extension].
+     * Keeps at most 20 entries per extension (oldest are dropped); duplicates are removed
+     * before the new entry is prepended so the new timestamp always wins.
+     */
+    fun recordOpenWith(extension: String, packageName: String, className: String) {
+        val current: RecentOpenWithApps =
+            fromJson(recentOpenWithApps) ?: RecentOpenWithApps()
+        val newEntry = RecentOpenWithEntry(
+            extension = extension.lowercase(),
+            packageName = packageName,
+            className = className,
+            timestamp = System.currentTimeMillis()
+        )
+        // Remove any existing entry for the same extension + app, then prepend the fresh one
+        val filtered = current.history.filter { entry ->
+            !(entry.extension == newEntry.extension &&
+                    entry.packageName == newEntry.packageName &&
+                    entry.className == newEntry.className)
+        }
+        // Keep at most 20 entries per extension
+        val perExtension = filtered
+            .filter { it.extension == newEntry.extension }
+            .take(19) // leave room for the new entry
+        val others = filtered.filter { it.extension != newEntry.extension }
+        recentOpenWithApps = RecentOpenWithApps(
+            history = listOf(newEntry) + perExtension + others
+        ).toJson()
+    }
+
+    //---------- Text Editor -------------//
+    var pinLineNumber by prefMutableState(
+        keyName = "pinLineNumber",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var symbolPairAutoCompletion by prefMutableState(
+        keyName = "symbolPairAutoCompletion",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var autoIndent by prefMutableState(
+        keyName = "autoIndent",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var enableMagnifier by prefMutableState(
+        keyName = "enableMagnifier",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var useICULibToSelectWords by prefMutableState(
+        keyName = "useICULibToSelectWords",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var deleteEmptyLineFast by prefMutableState(
+        keyName = "deleteEmptyLineFast",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var deleteMultiSpaces by prefMutableState(
+        keyName = "deleteMultiSpaces",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var recentFilesLimit by prefMutableState(
+        keyName = "textEditorRecentFilesLimit",
+        defaultValue = -1,
+        getPreferencesKey = { intPreferencesKey(it) }
+    )
+
+    var readOnly by prefMutableState(
+        keyName = "readOnly",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var wordWrap by prefMutableState(
+        keyName = "wordWrap",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var codeCompletion by prefMutableState(
+        keyName = "codeCompletion",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var snippetSuggestions by prefMutableState(
+        keyName = "snippetSuggestions",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var autoCloseTags by prefMutableState(
+        keyName = "autoCloseTags",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var bulletContinuation by prefMutableState(
+        keyName = "bulletContinuation",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var textEditorTheme by prefMutableState(
+        keyName = "textEditorTheme",
+        defaultValue = "auto",
+        getPreferencesKey = { stringPreferencesKey(it) }
+    )
+
+    //---------- Convertio & AI -------------//
+    var convertioApiKey by prefMutableState(
+        keyName = "convertioApiKey",
+        defaultValue = emptyString,
+        getPreferencesKey = { stringPreferencesKey(it) }
+    )
+
+    var aiModelVariant by prefMutableState(
+        keyName = "aiModelVariant",
+        defaultValue = "none", // "none", "quantized", "full"
+        getPreferencesKey = { stringPreferencesKey(it) }
+    )
+
+    var aiModelDownloaded by prefMutableState(
+        keyName = "aiModelDownloaded",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var disableMagikaExtOverride by prefMutableState(
+        keyName = "disableMagikaExtOverride",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var customCodeRunners by prefMutableState(
+        keyName = "customCodeRunners",
+        defaultValue = "{}",
+        getPreferencesKey = { stringPreferencesKey(it) }
+    )
+
+    //---------- Terminal -------------//
+    var terminalApp by prefMutableState(
+        keyName = "terminalApp",
+        defaultValue = TerminalAppPreference.BUILT_IN.ordinal,
+        getPreferencesKey = { intPreferencesKey(it) }
+    )
+
+    var customTerminalPackage by prefMutableState(
+        keyName = "customTerminalPackage",
+        defaultValue = "com.termux",
+        getPreferencesKey = { stringPreferencesKey(it) }
+    )
+
+    var customTerminalCommand by prefMutableState(
+        keyName = "customTerminalCommand",
+        defaultValue = "cd {dir}",
+        getPreferencesKey = { stringPreferencesKey(it) }
+    )
+
+    // //---------- File Sorting -------------//
+    var defaultSortMethod by prefMutableState(
+        keyName = "filesSortingMethod",
+        defaultValue = SORT_BY_NAME,
+        getPreferencesKey = { intPreferencesKey(it) }
+    )
+
+    var showFoldersFirst by prefMutableState(
+        keyName = "showFoldersFirst",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var reverse by prefMutableState(
+        keyName = "reverseFilesSortingMethod",
+        defaultValue = false,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    var onlyRefreshSortIconOnNavigation by prefMutableState(
+        keyName = "onlyRefreshSortIconOnNavigation",
+        defaultValue = true,
+        getPreferencesKey = { booleanPreferencesKey(it) }
+    )
+
+    private val folderSortingPrefsCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    fun getSortingPrefsFor(content: ContentHolder): FileSortingPrefs {
+        val key = "fileSortingPrefs_${content.uniquePath}"
+        val cachedJson = folderSortingPrefsCache[key] ?: runBlocking {
+            val raw = globalClass.prefDataStore.data.first()[stringPreferencesKey(key)]
+            folderSortingPrefsCache[key] = raw ?: ""
+            raw ?: ""
+        }
+        if (cachedJson.isNotEmpty()) {
+            fromJson<FileSortingPrefs>(cachedJson)?.let { return it }
+        }
+        return if (content is VirtualFileHolder && (content.type == VirtualFileHolder.RECENT || content.type == VirtualFileHolder.ALL_FILES)) {
+            FileSortingPrefs(
+                sortMethod = SORT_BY_DATE,
+                showFoldersFirst = false,
+                reverseSorting = false
+            )
+        } else {
+            getDefaultSortingPrefs()
+        }
+    }
+
+    fun getDefaultSortingPrefs() = FileSortingPrefs(
+        sortMethod = defaultSortMethod,
+        showFoldersFirst = showFoldersFirst,
+        reverseSorting = reverse
+    )
+
+    fun getDefaultViewConfigPrefs(): ViewConfigs {
+        return runBlocking {
+            fromJson(
+                globalClass.prefDataStore.data.first()[stringPreferencesKey("viewConfigPrefs")]
+            ) ?: ViewConfigs()
+        }
+    }
+
+    fun setDefaultViewConfigPrefs(prefs: ViewConfigs) {
+        itemSize = prefs.itemSize
+        runBlocking {
+            globalClass.prefDataStore.edit {
+                it[stringPreferencesKey("viewConfigPrefs")] = prefs.toJson()
+            }
+        }
+    }
+
+    fun setGlobalItemSize(newSize: Int) {
+        itemSize = newSize
+        val current = getDefaultViewConfigPrefs()
+        setDefaultViewConfigPrefs(current.copy(itemSize = newSize))
+        try {
+            globalClass.mainActivityManager.state.value.tabs.forEach { tab ->
+                if (tab is com.zenlabs.filemanager.screen.main.tab.files.FilesTab) {
+                    val folderConfig = getViewConfigPrefsFor(tab.activeFolder)
+                    tab.viewConfig = folderConfig.copy(itemSize = newSize)
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
+    fun reloadFromDataStore() {
+        runBlocking {
+            val currentPrefs = globalClass.prefDataStore.data.first()
+            com.zenlabs.filemanager.screen.preferences.misc.reloadAllPrefMutableStates(currentPrefs)
+        }
+        try {
+            globalClass.mainActivityManager.state.value.tabs.forEach { tab ->
+                if (tab is com.zenlabs.filemanager.screen.main.tab.files.FilesTab) {
+                    tab.viewConfig = getViewConfigPrefsFor(tab.activeFolder)
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
+    fun getViewConfigPrefsFor(content: ContentHolder): ViewConfigs {
+        return runBlocking {
+            fromJson(
+                globalClass.prefDataStore.data.first()[stringPreferencesKey("viewConfigPrefs_${content.uniquePath}")]
+            ) ?: categoryGalleryDefault(content) ?: getDefaultViewConfigPrefs()
+        }
+    }
+
+    private fun categoryGalleryDefault(content: ContentHolder): ViewConfigs? {
+        val type = (content as? VirtualFileHolder)?.type ?: return null
+        if (type == VirtualFileHolder.IMAGE || type == VirtualFileHolder.VIDEO ||
+            type == VirtualFileHolder.APK || type == VirtualFileHolder.DOCUMENT
+        ) {
+            return getDefaultViewConfigPrefs().copy(
+                viewType = ViewType.GRID,
+                galleryMode = true,
+                columnCount = maxOf(getDefaultViewConfigPrefs().columnCount, 3)
+            )
+        }
+        return null
+    }
+
+    fun setViewConfigPrefsFor(content: ContentHolder, prefs: ViewConfigs) {
+        if (prefs == getDefaultViewConfigPrefs()) {
+            runBlocking {
+                globalClass.prefDataStore.edit {
+                    it.remove(stringPreferencesKey("viewConfigPrefs_${content.uniquePath}"))
+                }
+            }
+        } else {
+            runBlocking {
+                globalClass.prefDataStore.edit {
+                    it[stringPreferencesKey("viewConfigPrefs_${content.uniquePath}")] =
+                        prefs.toJson()
+                }
+            }
+        }
+    }
+
+    fun setSortingPrefsFor(content: ContentHolder, prefs: FileSortingPrefs) {
+        val key = "fileSortingPrefs_${content.uniquePath}"
+        val json = prefs.toJson()
+        folderSortingPrefsCache[key] = json
+        runBlocking {
+            globalClass.prefDataStore.edit {
+                it[stringPreferencesKey(key)] = json
+            }
+        }
+    }
+
+    fun deleteSortingPrefsFor(content: ContentHolder) {
+        val key = "fileSortingPrefs_${content.uniquePath}"
+        folderSortingPrefsCache[key] = ""
+        runBlocking {
+            globalClass.prefDataStore.edit {
+                it.remove(stringPreferencesKey(key))
+            }
+        }
+    }
+
+    /**
+     * Deletes all files in the app's cache directory and any temp extraction folders.
+     * @return the total number of bytes freed.
+     */
+    fun clearTemporaryFiles(): Long {
+        var bytesFreed = 0L
+        fun deleteRecursively(file: java.io.File) {
+            if (file.isDirectory) {
+                file.listFiles()?.forEach { deleteRecursively(it) }
+            }
+            bytesFreed += file.length()
+            file.delete()
+        }
+
+        globalClass.cacheDir?.listFiles()?.forEach { deleteRecursively(it) }
+        // Also clear the external cache dirs
+        globalClass.externalCacheDirs?.forEach { dir ->
+            dir?.listFiles()?.forEach { deleteRecursively(it) }
+        }
+        return bytesFreed
+    }
+
+    class SingleChoiceDialog {
+        var show by mutableStateOf(false)
+
+        var title = emptyString
+            private set
+        var description = emptyString
+            private set
+        var choices = mutableListOf<String>()
+            private set
+        var onSelect: (choice: Int) -> Unit = {}
+            private set
+        var selectedChoice = -1
+
+        fun dismiss() {
+            show = false
+            title = emptyString
+            description = emptyString
+            choices.clear()
+            selectedChoice = -1
+            onSelect = {}
+        }
+
+        fun show(
+            title: String,
+            description: String,
+            choices: List<String>,
+            selectedChoice: Int,
+            onSelect: (choice: Int) -> Unit
+        ) {
+            this.title = title
+            this.description = description
+            this.choices.clear()
+            this.choices.addAll(choices)
+            this.onSelect = onSelect
+            this.selectedChoice = selectedChoice
+            show = true
+        }
+    }
+}

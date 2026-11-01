@@ -1,0 +1,331 @@
+package com.zenlabs.filemanager.screen.preferences.ui
+
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Animation
+import androidx.compose.material.icons.rounded.FindReplace
+import androidx.compose.material.icons.rounded.FlipToBack
+import androidx.compose.material.icons.rounded.Gesture
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.OpenInBrowser
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Restore
+import androidx.compose.material.icons.rounded.Storage
+import androidx.compose.material.icons.rounded.SubdirectoryArrowLeft
+import androidx.compose.material.icons.rounded.TouchApp
+import androidx.compose.material.icons.rounded.VideoFile
+import androidx.compose.material.icons.rounded.Warning
+import androidx.compose.material.icons.rounded.VpnKey
+import androidx.compose.material.icons.rounded.Folder
+import com.zenlabs.filemanager.screen.preferences.constant.DragDropAction
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import com.zenlabs.filemanager.App.Companion.globalClass
+import com.zenlabs.filemanager.R
+import com.zenlabs.filemanager.common.emptyString
+
+@Composable
+fun BehaviorContainer() {
+    val prefs = globalClass.preferencesManager
+
+    val defaultOpeningMethodsList = prefs.getDefaultOpeningMethodsList()
+    var showDefaultAppsDialog by remember { mutableStateOf(false) }
+
+    DefaultAppsDialog(
+        show = showDefaultAppsDialog,
+        onDismissRequest = { showDefaultAppsDialog = false }
+    )
+
+    Container(title = stringResource(R.string.behavior)) {
+        PreferenceItem(
+            label = stringResource(R.string.default_opening_methods),
+            supportingText = if (defaultOpeningMethodsList.isNotEmpty()) {
+                stringResource(R.string.default_opening_methods_count, defaultOpeningMethodsList.size)
+            } else {
+                stringResource(R.string.no_default_opening_methods)
+            },
+            icon = Icons.Rounded.OpenInBrowser,
+            onClick = { showDefaultAppsDialog = true }
+        )
+
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            thickness = 3.dp
+        )
+
+        PreferenceItem(
+            label = stringResource(R.string.show_files_options_menu_on_long_click),
+            supportingText = emptyString,
+            icon = Icons.Rounded.TouchApp,
+            switchState = prefs.showFileOptionMenuOnLongClick,
+            onSwitchChange = { prefs.showFileOptionMenuOnLongClick = it }
+        )
+
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            thickness = 3.dp
+        )
+
+        PreferenceItem(
+            label = stringResource(R.string.drag_and_drop_action),
+            supportingText = when (prefs.dragDropAction) {
+                DragDropAction.ALWAYS_MOVE.ordinal -> stringResource(R.string.drag_drop_move)
+                DragDropAction.ALWAYS_COPY.ordinal -> stringResource(R.string.drag_drop_copy)
+                else -> stringResource(R.string.drag_drop_ask)
+            },
+            icon = Icons.Rounded.Folder,
+            onClick = {
+                prefs.singleChoiceDialog.show(
+                    title = globalClass.getString(R.string.drag_and_drop_action),
+                    description = globalClass.getString(R.string.drag_and_drop_action_desc),
+                    choices = listOf(
+                        globalClass.getString(R.string.drag_drop_ask),
+                        globalClass.getString(R.string.drag_drop_copy),
+                        globalClass.getString(R.string.drag_drop_move)
+                    ),
+                    selectedChoice = prefs.dragDropAction,
+                    onSelect = { prefs.dragDropAction = it }
+                )
+            }
+        )
+
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            thickness = 3.dp
+        )
+
+        PreferenceItem(
+            label = stringResource(R.string.show_video_duration),
+            supportingText = stringResource(R.string.show_video_duration_desc),
+            icon = Icons.Rounded.VideoFile,
+            switchState = prefs.showVideoDuration,
+            onSwitchChange = { prefs.showVideoDuration = it }
+        )
+
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            thickness = 3.dp
+        )
+
+        PreferenceItem(
+            label = stringResource(R.string.disable_pull_down_to_refresh),
+            supportingText = emptyString,
+            icon = Icons.Rounded.Refresh,
+            switchState = prefs.disablePullDownToRefresh,
+            onSwitchChange = { prefs.disablePullDownToRefresh = it }
+        )
+
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            thickness = 3.dp
+        )
+
+        PreferenceItem(
+            label = "Disable Navigation Gestures",
+            supportingText = "Turn off swipe-up shortcuts in the file list",
+            icon = Icons.Rounded.Gesture,
+            switchState = prefs.disableNavigationGestures,
+            onSwitchChange = { prefs.disableNavigationGestures = it }
+        )
+
+        if (!prefs.disableNavigationGestures) {
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                thickness = 3.dp
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Middle Swipe Area Width (${prefs.middleSwipeZoneWidthPercent}%)",
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Text(
+                    text = "Center zone swipes between sub-categories (2nd tab bar); left and right zones swipe between main tabs",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp
+                )
+                Slider(
+                    value = prefs.middleSwipeZoneWidthPercent.toFloat(),
+                    onValueChange = { prefs.middleSwipeZoneWidthPercent = it.toInt().coerceIn(20, 70) },
+                    valueRange = 20f..70f
+                )
+            }
+        }
+
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            thickness = 3.dp
+        )
+
+        PreferenceItem(
+            label = "Disable Spring / Bounce Effect",
+            supportingText = "Remove elastic bounce from pull-to-refresh",
+            icon = Icons.Rounded.Refresh,
+            switchState = prefs.disableSpringEffect,
+            onSwitchChange = { prefs.disableSpringEffect = it }
+        )
+
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            thickness = 3.dp
+        )
+
+        PreferenceItem(
+            label = "Show \"..\" Parent Folder Entry",
+            supportingText = "Show a \'..\' row at the top of file lists to navigate up",
+            icon = Icons.Rounded.SubdirectoryArrowLeft,
+            switchState = prefs.showParentDirectoryEntry,
+            onSwitchChange = { prefs.showParentDirectoryEntry = it }
+        )
+
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            thickness = 3.dp
+        )
+
+        PreferenceItem(
+            label = stringResource(R.string.skip_home_when_tab_closed),
+            supportingText = emptyString,
+            icon = Icons.Rounded.Home,
+            switchState = prefs.skipHomeWhenTabClosed,
+            onSwitchChange = { prefs.skipHomeWhenTabClosed = it }
+        )
+
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            thickness = 3.dp
+        )
+
+        PreferenceItem(
+            label = stringResource(R.string.close_tab_on_back_nav),
+            supportingText = emptyString,
+            icon = Icons.Rounded.FlipToBack,
+            switchState = prefs.closeTabOnBackPress,
+            onSwitchChange = { prefs.closeTabOnBackPress = it }
+        )
+
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            thickness = 3.dp
+        )
+
+        PreferenceItem(
+            label = stringResource(R.string.remember_last_session),
+            supportingText = stringResource(R.string.remember_last_session_desc),
+            icon = Icons.Rounded.Restore,
+            switchState = prefs.rememberLastSession,
+            onSwitchChange = { prefs.rememberLastSession = it }
+        )
+
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            thickness = 3.dp
+        )
+
+        PreferenceItem(
+            label = stringResource(R.string.confirm_before_exit),
+            supportingText = emptyString,
+            icon = Icons.Rounded.Warning,
+            switchState = prefs.confirmBeforeAppClose,
+            onSwitchChange = { prefs.confirmBeforeAppClose = it }
+        )
+
+        PreferenceItem(
+            label = stringResource(R.string.use_builtin_viewers),
+            supportingText = stringResource(R.string.use_builtin_viewers_desc),
+            icon = Icons.Rounded.OpenInBrowser,
+            switchState = prefs.useBuiltInViewer,
+            onSwitchChange = { prefs.useBuiltInViewer = it }
+        )
+
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            thickness = 3.dp
+        )
+
+        PreferenceItem(
+            label = stringResource(R.string.auto_hide_video_controls),
+            supportingText = stringResource(R.string.auto_hide_video_controls_summary),
+            icon = Icons.Rounded.VideoFile,
+            switchState = prefs.autoHideVideoControls,
+            onSwitchChange = { prefs.autoHideVideoControls = it }
+        )
+
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            thickness = 3.dp
+        )
+
+        PreferenceItem(
+            label = stringResource(R.string.disable_magika_ext_override),
+            supportingText = stringResource(R.string.disable_magika_ext_override_desc),
+            icon = Icons.Rounded.FindReplace,
+            switchState = prefs.disableMagikaExtOverride,
+            onSwitchChange = { prefs.disableMagikaExtOverride = it }
+        )
+
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            thickness = 3.dp
+        )
+
+        PreferenceItem(
+            label = stringResource(R.string.hide_root_storage),
+            supportingText = stringResource(R.string.hide_root_storage_desc),
+            icon = Icons.Rounded.Storage,
+            switchState = prefs.hideRootStorage,
+            onSwitchChange = { prefs.hideRootStorage = it }
+        )
+
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            thickness = 3.dp
+        )
+
+        val showApiKeyDialogState = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+
+        PreferenceItem(
+            label = "Convertio API Key",
+            supportingText = if (prefs.convertioApiKey.isBlank()) "No key set (used for PDF conversion)" else "Key: " + "•".repeat(prefs.convertioApiKey.length.coerceAtMost(8)),
+            icon = Icons.Rounded.VpnKey,
+            onClick = { showApiKeyDialogState.value = true }
+        )
+
+        if (showApiKeyDialogState.value) {
+            com.zenlabs.filemanager.common.ConvertioApiKeyDialog(
+                onDismiss = { showApiKeyDialogState.value = false },
+                onConfirm = { key ->
+                    prefs.convertioApiKey = key
+                    showApiKeyDialogState.value = false
+                }
+            )
+        }
+    }
+}

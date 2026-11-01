@@ -1,0 +1,680 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Allow androidx.pdf which requires minSdk 31 — we override to support our minSdk=26 -->
+    <uses-sdk tools:overrideLibrary="androidx.pdf,androidx.pdf.viewer,androidx.pdf.viewer.fragment,androidx.pdf.document.service,androidx.pdf.core" />
+
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Required by TerminalSessionService which runs as android:foregroundServiceType="specialUse".
+         On Android 14+ (API 34+) the OS requires this permission when a foreground service
+         declares the specialUse type (used here for the built-in terminal emulator). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"
+        tools:targetApi="34" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="com.android.launcher.permission.INSTALL_SHORTCUT" />
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Required to read the device's local IP address for the built-in
+         FTP Server and Web Sharing Portal features (no data sent externally). -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+    <!-- Required by the mDNS/network-discovery stack used to locate SMB/LAN
+         servers on the local network when using the Remote Connection Wizard. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+    <!-- Acquired by TerminalSessionService to keep terminal sessions alive
+         when the screen turns off (prevents the shell process from being killed). -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Required to bind to the Shizuku privileged binder API (rikka.shizuku.ShizukuProvider).
+         Shizuku enables root/adb-level file access for reading system directories without
+         requiring a fully rooted device. This is NOT a Google permission; it belongs to
+         the open-source Shizuku project (https://github.com/RikkaApps/Shizuku). -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
+
+    <!-- Optional: Required to send commands to Termux via RUN_COMMAND Intent -->
+    <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
+
+    <queries>
+        <intent>
+            <action android:name="moe.shizuku.privileged.api.intent.action.REQUEST_PERMISSION" />
+        </intent>
+        <intent>
+            <action android:name="rikka.shizuku.intent.action.REQUEST_BINDER" />
+        </intent>
+        <provider android:authorities="moe.shizuku.privileged.api.shizuku" />
+        <package android:name="com.termux" />
+        <intent>
+            <action android:name="com.termux.RUN_COMMAND" />
+        </intent>
+        <intent>
+            <action android:name="android.media.action.DISPLAY_AUDIO_EFFECT_CONTROL_PANEL" />
+        </intent>
+    </queries>
+
+    <uses-feature
+        android:glEsVersion="0x00020000"
+        android:required="true" />
+
+    <application
+        android:name=".App"
+        android:allowBackup="true"
+        android:hardwareAccelerated="true"
+        android:largeHeap="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:requestLegacyExternalStorage="true"
+        android:extractNativeLibs="true"
+        android:theme="@style/Theme.FileExplorer"
+        tools:targetApi="34" >
+
+        <!--
+            ML Kit (com.google.mlkit) is used exclusively for on-device AI Semantic Search
+            and OCR (MlKitOcrEngine). ML Kit does NOT send any data to Google servers when
+            called with on-device models.
+
+            The library auto-merges MlKitComponentDiscoveryService and MlKitInitProvider into
+            every app's manifest via its own AAR manifests. Since File Manager by ZenLabs calls the ML Kit API
+            explicitly (not through auto-init), these entries are redundant here.
+            We suppress them with tools:node="remove" so they don't appear in the merged
+            manifest and don't raise privacy concerns for users or downstream reviewers.
+        -->
+        <service
+            android:name="com.google.mlkit.common.internal.MlKitComponentDiscoveryService"
+            tools:node="remove" />
+        <provider
+            android:name="com.google.mlkit.common.internal.MlKitInitProvider"
+            android:authorities="${applicationId}.mlkitinitprovider"
+            tools:node="remove" />
+
+        <activity
+            android:name=".screen.textEditor.TextEditorActivity"
+            android:exported="false"
+            android:label="@string/title_activity_text_editor"
+            android:theme="@style/Theme.FileExplorer"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity android:name=".screen.preferences.PreferencesActivity"
+            android:exported="false"
+            android:label="@string/title_activity_preferences"
+            android:theme="@style/Theme.FileExplorer"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".screen.viewer.pdf.PdfViewerActivity"
+            android:exported="true"
+            android:label="@string/title_activity_pdf_viewer"
+            android:theme="@style/Theme.FileExplorer"
+            android:windowSoftInputMode="adjustResize"
+            android:documentLaunchMode="intoExisting"
+            android:autoRemoveFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="application/pdf"/>
+                <data android:scheme="file"/>
+                <data android:scheme="content"/>
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".screen.viewer.text.TextViewerActivity"
+            android:exported="true"
+            android:label="@string/text_viewer"
+            android:theme="@style/Theme.FileExplorer"
+            android:windowSoftInputMode="adjustResize"
+            android:documentLaunchMode="intoExisting"
+            android:autoRemoveFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="text/*" />
+                <data android:mimeType="application/json" />
+                <data android:mimeType="application/xml" />
+                <data android:mimeType="application/javascript" />
+                <data android:mimeType="application/x-javascript" />
+                <data android:mimeType="application/x-sh" />
+                <data android:mimeType="application/x-shellscript" />
+                <data android:mimeType="application/x-yaml" />
+                <data android:mimeType="application/x-sql" />
+                <data android:mimeType="application/sql" />
+                <data android:scheme="file" />
+                <data android:scheme="content" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".screen.viewer.image.ImageViewerActivity"
+            android:exported="true"
+            android:label="@string/title_activity_image_viewer"
+            android:theme="@style/Theme.FileExplorer"
+            android:windowSoftInputMode="adjustResize"
+            android:documentLaunchMode="intoExisting"
+            android:autoRemoveFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="image/*"/>
+                <data android:scheme="file"/>
+                <data android:scheme="content"/>
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".screen.viewer.image.ImageEditorActivity"
+            android:exported="true"
+            android:label="Image Editor"
+            android:theme="@style/Theme.FileExplorer"
+            android:windowSoftInputMode="adjustResize"
+            android:documentLaunchMode="intoExisting"
+            android:autoRemoveFromRecents="true" />
+
+        <activity
+            android:name=".screen.viewer.audio.AudioPlayerActivity"
+            android:exported="true"
+            android:label="@string/title_activity_audio_player"
+            android:theme="@style/Theme.FileExplorer"
+            android:windowSoftInputMode="adjustResize"
+            android:documentLaunchMode="intoExisting"
+            android:autoRemoveFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="audio/*"/>
+                <data android:scheme="file"/>
+                <data android:scheme="content"/>
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".screen.viewer.video.VideoPlayerActivity"
+            android:exported="true"
+            android:label="@string/title_activity_video_player"
+            android:theme="@style/Theme.FileExplorer"
+            android:windowSoftInputMode="adjustResize"
+            android:documentLaunchMode="intoExisting"
+            android:autoRemoveFromRecents="true"
+            android:supportsPictureInPicture="true"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data android:mimeType="video/*" />
+                <data android:scheme="file" />
+                <data android:scheme="content" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".screen.logs.LogsActivity"
+            android:exported="false"
+            android:label="@string/title_activity_logs"
+            android:theme="@style/Theme.FileExplorer"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- LaTeX Viewer -->
+        <activity
+            android:name=".screen.viewer.latex.LatexViewerActivity"
+            android:exported="true"
+            android:label="LaTeX Viewer"
+            android:theme="@style/Theme.FileExplorer"
+            android:documentLaunchMode="intoExisting"
+            android:autoRemoveFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="text/x-tex"/>
+                <data android:mimeType="application/x-latex"/>
+                <data android:scheme="file"/>
+                <data android:scheme="content"/>
+            </intent-filter>
+        </activity>
+
+        <!-- Markdown Viewer -->
+        <activity
+            android:name=".screen.viewer.markdown.MarkdownViewerActivity"
+            android:exported="true"
+            android:label="Markdown Viewer"
+            android:theme="@style/Theme.FileExplorer"
+            android:documentLaunchMode="intoExisting"
+            android:autoRemoveFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="text/markdown"/>
+                <data android:mimeType="text/x-markdown"/>
+                <data android:scheme="file"/>
+                <data android:scheme="content"/>
+            </intent-filter>
+        </activity>
+
+        <!-- HTML Viewer -->
+        <activity
+            android:name=".screen.viewer.html.HtmlViewerActivity"
+            android:exported="true"
+            android:label="HTML Viewer"
+            android:theme="@style/Theme.FileExplorer"
+            android:documentLaunchMode="intoExisting"
+            android:autoRemoveFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="text/html"/>
+                <data android:scheme="file"/>
+                <data android:scheme="content"/>
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".screen.viewer.html.HtmlLivePreviewActivity"
+            android:exported="false"
+            android:label="HTML Preview"
+            android:theme="@style/Theme.FileExplorer" />
+
+        <!-- Office Document Viewer -->
+        <activity
+            android:name=".screen.viewer.document.DocumentViewerActivity"
+            android:exported="true"
+            android:label="Document Viewer"
+            android:theme="@style/Theme.FileExplorer"
+            android:documentLaunchMode="intoExisting"
+            android:autoRemoveFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="application/msword"/>
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document"/>
+                <data android:mimeType="application/vnd.ms-excel"/>
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"/>
+                <data android:mimeType="application/vnd.ms-powerpoint"/>
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.presentationml.presentation"/>
+                <data android:mimeType="application/vnd.oasis.opendocument.text"/>
+                <data android:mimeType="application/vnd.oasis.opendocument.spreadsheet"/>
+                <data android:mimeType="application/vnd.oasis.opendocument.presentation"/>
+                <data android:scheme="file"/>
+                <data android:scheme="content"/>
+            </intent-filter>
+        </activity>
+
+        <!-- Spreadsheet Viewer (Excel, CSV, TSV) -->
+        <activity
+            android:name=".screen.viewer.spreadsheet.SpreadsheetViewerActivity"
+            android:exported="true"
+            android:label="@string/title_activity_spreadsheet_viewer"
+            android:theme="@style/Theme.FileExplorer"
+            android:documentLaunchMode="intoExisting"
+            android:autoRemoveFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="application/vnd.ms-excel" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+                <data android:mimeType="application/vnd.ms-excel.sheet.macroEnabled.12" />
+                <data android:mimeType="text/csv" />
+                <data android:mimeType="text/comma-separated-values" />
+                <data android:mimeType="text/tab-separated-values" />
+                <data android:mimeType="application/vnd.oasis.opendocument.spreadsheet" />
+                <data android:scheme="file" />
+                <data android:scheme="content" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="file" />
+                <data android:scheme="content" />
+                <data android:host="*" />
+                <data android:pathPattern=".*\\.xlsx" />
+                <data android:pathPattern=".*\\.xls" />
+                <data android:pathPattern=".*\\.xlsm" />
+                <data android:pathPattern=".*\\.xlt" />
+                <data android:pathPattern=".*\\.xltx" />
+                <data android:pathPattern=".*\\.csv" />
+                <data android:pathPattern=".*\\.tsv" />
+                <data android:pathPattern=".*\\.ods" />
+            </intent-filter>
+        </activity>
+
+
+        <!-- Sandboxed LibreOffice Engine Service -->
+        <service
+            android:name=".office.OfficeEngineService"
+            android:exported="false"
+            android:process=":office_service" />
+
+        <!-- Comic Viewer -->
+        <activity
+            android:name=".screen.viewer.comic.ComicViewerActivity"
+            android:exported="true"
+            android:label="@string/title_activity_comic_viewer"
+            android:theme="@style/Theme.FileExplorer"
+            android:documentLaunchMode="intoExisting"
+            android:autoRemoveFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="application/vnd.comicbook+zip" />
+                <data android:mimeType="application/vnd.comicbook-rar" />
+                <data android:mimeType="application/x-cbz" />
+                <data android:mimeType="application/x-cbr" />
+                <data android:mimeType="application/x-cb7" />
+                <data android:mimeType="application/x-cbt" />
+                <data android:scheme="file" />
+                <data android:scheme="content" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="file" />
+                <data android:scheme="content" />
+                <data android:host="*" />
+                <data android:pathPattern=".*\\.cbz" />
+                <data android:pathPattern=".*\\.cbr" />
+                <data android:pathPattern=".*\\.cb7" />
+                <data android:pathPattern=".*\\.cbt" />
+            </intent-filter>
+        </activity>
+
+        <!-- E-Book Viewer (EPUB, MOBI, AZW, AZW3, PRC, RTF, ODT, FB2) -->
+        <activity
+            android:name=".screen.viewer.epub.EpubViewerActivity"
+            android:exported="true"
+            android:label="@string/title_activity_epub_viewer"
+            android:theme="@style/Theme.FileExplorer"
+            android:documentLaunchMode="intoExisting"
+            android:autoRemoveFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="application/epub+zip" />
+                <data android:mimeType="application/x-mobipocket-ebook" />
+                <data android:mimeType="application/vnd.amazon.mobi" />
+                <data android:mimeType="application/x-fictionbook+xml" />
+                <data android:mimeType="application/rtf" />
+                <data android:mimeType="text/rtf" />
+                <data android:mimeType="application/vnd.oasis.opendocument.text" />
+                <data android:scheme="file" />
+                <data android:scheme="content" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="file" />
+                <data android:scheme="content" />
+                <data android:host="*" />
+                <data android:pathPattern=".*\\.epub" />
+                <data android:pathPattern=".*\\.mobi" />
+                <data android:pathPattern=".*\\.azw" />
+                <data android:pathPattern=".*\\.azw3" />
+                <data android:pathPattern=".*\\.prc" />
+                <data android:pathPattern=".*\\.rtf" />
+                <data android:pathPattern=".*\\.odt" />
+                <data android:pathPattern=".*\\.fb2" />
+            </intent-filter>
+        </activity>
+
+        <!-- DjVu Viewer -->
+        <activity
+            android:name=".screen.viewer.djvu.DjvuViewerActivity"
+            android:exported="true"
+            android:label="@string/title_activity_djvu_viewer"
+            android:theme="@style/Theme.FileExplorer"
+            android:documentLaunchMode="intoExisting"
+            android:autoRemoveFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="image/vnd.djvu" />
+                <data android:mimeType="image/djvu" />
+                <data android:mimeType="image/x-djvu" />
+                <data android:scheme="file" />
+                <data android:scheme="content" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="file" />
+                <data android:scheme="content" />
+                <data android:host="*" />
+                <data android:pathPattern=".*\\.djvu" />
+                <data android:pathPattern=".*\\.djv" />
+            </intent-filter>
+        </activity>
+
+        <!-- SAF File & Folder Picker Activity -->
+        <activity
+            android:name=".screen.picker.FilePickerActivity"
+            android:exported="true"
+            android:label="@string/file_picker_title"
+            android:theme="@style/Theme.FileExplorer"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.GET_CONTENT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.OPENABLE" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.PICK" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.OPENABLE" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.OPEN_DOCUMENT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.OPENABLE" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.OPEN_DOCUMENT_TREE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- Open With dispatcher for all supported extensions -->
+        <activity
+            android:name=".screen.openwith.OpenWithDispatchActivity"
+            android:exported="true"
+            android:label="@string/open_with_file_manager"
+            android:theme="@style/Theme.FileExplorer.Transparent"
+            android:windowSoftInputMode="adjustResize"
+            android:documentLaunchMode="intoExisting"
+            android:autoRemoveFromRecents="true">
+            <!-- Archives -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+                <data android:mimeType="application/x-7z-compressed" />
+                <data android:mimeType="application/x-rar-compressed" />
+                <data android:mimeType="application/x-tar" />
+                <data android:mimeType="application/gzip" />
+                <data android:mimeType="application/x-gzip" />
+                <data android:mimeType="application/x-bzip2" />
+                <data android:mimeType="application/x-xz" />
+                <data android:mimeType="application/x-iso9660-image" />
+                <data android:mimeType="application/x-compressed" />
+                <data android:mimeType="application/x-archive" />
+                <data android:mimeType="application/zstd" />
+                <data android:mimeType="application/x-lz4" />
+                <data android:mimeType="application/vnd.comicbook+zip" />
+                <data android:mimeType="application/vnd.comicbook-rar" />
+                <data android:mimeType="application/x-cbz" />
+                <data android:mimeType="application/x-cbr" />
+                <data android:mimeType="application/x-cb7" />
+                <data android:mimeType="application/x-cbt" />
+                <data android:mimeType="application/epub+zip" />
+                <data android:mimeType="application/x-mobipocket-ebook" />
+                <data android:mimeType="application/vnd.amazon.mobi" />
+                <data android:mimeType="application/x-fictionbook+xml" />
+                <data android:mimeType="application/rtf" />
+                <data android:mimeType="text/rtf" />
+                <data android:mimeType="application/vnd.oasis.opendocument.text" />
+                <data android:mimeType="image/vnd.djvu" />
+                <data android:mimeType="image/djvu" />
+                <data android:mimeType="image/x-djvu" />
+                <data android:scheme="file" />
+                <data android:scheme="content" />
+            </intent-filter>
+            <!-- APK and APK Bundles -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="application/vnd.android.package-archive" />
+                <data android:scheme="file" />
+                <data android:scheme="content" />
+            </intent-filter>
+            <!-- Generic and all extensions -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="*/*" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:scheme="file" />
+                <data android:scheme="content" />
+            </intent-filter>
+        </activity>
+
+
+        <activity
+            android:name=".screen.main.MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.FileExplorer"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".screen.share.ShareReceiverActivity"
+            android:exported="true"
+            android:theme="@style/Theme.FileExplorer.Transparent"
+            android:label="@string/share_to_file_manager"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:autoRemoveFromRecents="true"
+            android:documentLaunchMode="intoExisting"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".screen.main.tab.files.service.ContentOperationService"
+            android:foregroundServiceType="dataSync" />
+
+        <service
+            android:name=".screen.main.tab.files.service.FtpForegroundService"
+            android:foregroundServiceType="dataSync" />
+
+        <service
+            android:name=".screen.main.tab.files.service.WebSharingForegroundService"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- WorkManager foreground service declaration for Android 14+ (API 34+) -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
+
+        <!-- Terminal Emulator -->
+        <activity
+            android:name=".screen.terminal.TerminalActivity"
+            android:exported="false"
+            android:label="Terminal"
+            android:theme="@style/Theme.FileExplorer"
+            android:windowSoftInputMode="adjustResize|stateVisible"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+
+        <service
+            android:name=".screen.terminal.TerminalSessionService"
+            android:foregroundServiceType="specialUse"
+            tools:targetApi="34">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="terminal" />
+        </service>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.zenlabs.filemanager.provider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/provider_paths" />
+        </provider>
+
+        <!-- Storage Access Framework (SAF) DocumentsProvider -->
+        <provider
+            android:name=".saf.ZenLabsDocumentsProvider"
+            android:authorities="${applicationId}.documents"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
+
+        <!-- Shizuku Provider (must be registered for Shizuku binding) -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:exported="true"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+    </application>
+
+</manifest>
