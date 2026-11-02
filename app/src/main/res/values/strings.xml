@@ -1,5 +1,10 @@
 <resources>
-    <string name="app_name">File Manager by ZenLabs</string>
+    <string name="app_name">File Manager</string>
+    <!-- Subtle, user-visible ZenLabs attribution shown on the About screen. -->
+    <string name="zenlabs_attribution">Made by ZenLabs</string>
+    <!-- Home tile labels (static, short so they fit the tiles cleanly). -->
+    <string name="home_category_recent">Recent</string>
+    <string name="home_category_apk">APK</string>
     <string name="title_activity_comic_viewer">Comic Viewer</string>
     <string name="title_activity_epub_viewer">E-Book Reader</string>
     <string name="title_activity_djvu_viewer">DjVu Viewer</string>
@@ -7,7 +12,7 @@
     <string name="internal_storage">Internal Storage</string>
     <string name="storage_permission_required">Storage access permission is required</string>
     <string name="title_activity_text_editor">TextEditorActivity</string>
-    <string name="main_activity_title">File Manager by ZenLabs</string>
+    <string name="main_activity_title">File Manager</string>
     <string name="jump_to_path">Jump to path</string>
     <string name="destination_path">Destination path</string>
     <string name="open">Open</string>
@@ -605,7 +610,7 @@
     <string name="share_files_saved">Files saved successfully</string>
     <string name="share_failed_to_save">Failed to save files</string>
     <string name="share_no_files_found">No shareable files found</string>
-    <string name="share_to_file_manager">File Manager by ZenLabs</string>
+    <string name="share_to_file_manager">File Manager</string>
 
     <string name="hide_root_storage">Hide root storage</string>
     <string name="hide_root_storage_desc">Hide the root storage directory from the storage devices list</string>
@@ -650,7 +655,7 @@
     <string name="termux_installed">Termux is installed</string>
     <string name="termux_not_installed">Termux is not installed (tap to download)</string>
     <string name="termux_not_installed_error">Termux is not installed. Please install Termux from F-Droid or GitHub.</string>
-    <string name="termux_setup_info">File Manager by ZenLabs sends commands directly to Termux via RUN_COMMAND and opens the target folder.\n\nFor automatic command execution in Termux:\n1. Set \'allow-external-apps=true\' in ~/.termux/termux.properties\n2. In Android Settings → Apps → File Manager by ZenLabs → Permissions, allow \"Run commands in Termux environment\".</string>
+    <string name="termux_setup_info">File Manager sends commands directly to Termux via RUN_COMMAND and opens the target folder.\n\nFor automatic command execution in Termux:\n1. Set \'allow-external-apps=true\' in ~/.termux/termux.properties\n2. In Android Settings → Apps → File Manager → Permissions, allow \"Run commands in Termux environment\".</string>
     <string name="termux_permission_status">Command execution permission</string>
     <string name="termux_permission_granted">Permission granted (direct execution enabled)</string>
     <string name="termux_permission_not_granted">Permission not granted (tap to configure)</string>

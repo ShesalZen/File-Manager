@@ -219,6 +219,26 @@ fun AppInfoDialog(
                                 )
                             }
 
+                            // Subtle ZenLabs attribution: quiet, secondary text under the version
+                            // badge so branding is discoverable on the About screen without
+                            // overpowering the app name.
+                            AnimatedVisibility(
+                                visible = animateContent,
+                                enter = fadeIn(animationSpec = tween(delayMillis = 250))
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Space(8.dp)
+                                    Text(
+                                        text = stringResource(R.string.zenlabs_attribution),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(
+                                            alpha = 0.7f
+                                        ),
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+
                             Space(32.dp)
 
                             // Divider

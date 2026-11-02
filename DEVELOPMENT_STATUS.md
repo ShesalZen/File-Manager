@@ -10,7 +10,7 @@ still requires a physical Android device or emulator. The release gate is the ch
 
 - Package/namespace: `com.zenlabs.filemanager`.
 - Clean host build: `clean :app:testDebugUnitTest :app:assembleDebug` succeeded.
-- Unit tests: **48 passed, 0 failed, 0 errors, 0 skipped** across 14 suites.
+- Unit tests: **71 passed, 0 failed, 0 errors, 0 skipped** across 16 suites.
 - Debug APKs: universal, ARM64, ARMv7, and x86_64 outputs were produced.
 - Supported packaged ABIs: `arm64-v8a`, `armeabi-v7a`, and `x86_64`. There is deliberately
   **no x86 APK** because upstream has no x86 builds of `lib7za.so` or `libtectonic.so`.
@@ -31,12 +31,46 @@ still requires a physical Android device or emulator. The release gate is the ch
 - The application uses the `arm64-v8a`, `armeabi-v7a`, and `x86_64` ABI filters consistently in
   both the application build and ABI splits.
 - The generated artifacts are:
-  - `app-arm64-v8a-debug.apk`: 96,750,779 bytes.
-  - `app-armeabi-v7a-debug.apk`: 94,856,815 bytes.
-  - `app-x86_64-debug.apk`: 99,155,847 bytes.
-  - `app-universal-debug.apk`: 141,334,941 bytes (134.79 MiB).
+  - `app-arm64-v8a-debug.apk`: 96,756,203 bytes.
+  - `app-armeabi-v7a-debug.apk`: 94,862,243 bytes.
+  - `app-x86_64-debug.apk`: 99,161,271 bytes.
+  - `app-universal-debug.apk`: 141,340,369 bytes (134.79 MiB).
 - `tools/analyze_apks.ps1` checks each APK's ABI directories, expected native-library inventory,
   and ELF architecture. The current report is committed under `docs/APK_ANALYSIS.md`.
+
+### File sizes, home tiles, scrollbar, Recent list, and naming
+
+- File sizes are decimal (base-1000) everywhere: `common/FileSizeFormat.kt` renders `B`, `KB`, `MB`,
+  `GB`, and `TB` with at most one decimal, and `Long.toFormattedSize()` in `common/Utils.kt`
+  delegates to it so every screen shows the same string. Unit selection uses repeated division
+  instead of `log10`/`pow`, and promotes a unit before it can render as `1,000 KB`.
+- Home category tiles use short, static labels that fit the tile width (`Recent`, `APK`); the
+  animated marquee was removed so tile text never scrolls, with ellipsis only as a safety net for
+  very large font scales.
+- The list scrollbar draws only its draggable thumb (`common/ui/FastScrollbar.kt`): the full-height
+  track/bar is no longer painted, while hold-to-drag seeking, fast scrolling, and section jumps are
+  unchanged.
+- The Recent list is bounded (`RecentFilePolicy.kt` + `StorageProvider`): it merges files mutated
+  inside the app with a MediaStore query restricted to a recency window, newest first, capped at
+  `MAX_RECENT_CANDIDATES`. The previous whole-device walk (which could list ~18,000+ entries) and
+  its legacy MediaStore cache were removed. Recency is based on last-modified time, which is what
+  the app can obtain for every provider; it is never presented as a "last opened" time.
+- Recent change detection was re-pointed at the same bounded MediaStore query that builds the
+  list (`recentNewestModifiedSeconds`), because the old signal came from the all-device cache that
+  Recent no longer populates. The list and the check now share one query builder, so they cannot
+  drift apart in their filters.
+- `RecentFile.lastModified` is normalized to milliseconds everywhere. The all-device collector
+  previously stored seconds while the new bounded collector stored milliseconds, which would have
+  silently scrambled the newest-first ordering if the two were ever merged. MediaStore timestamps
+  now go through `RecentFilePolicy.mediaStoreSecondsToMillis`.
+- The app is named **File Manager** (`app_name`, `main_activity_title`, share/open-with labels,
+  onboarding copy, and the eight translated `app_name` variants). The "by ZenLabs" suffix was
+  dropped from the display name; a subtle `Made by ZenLabs` attribution is shown under the version
+  badge on the About screen instead.
+- New JVM-only tests cover this work: `common/FileSizeFormatTest` (8 tests, locale pinned to
+  `en-US`) and `...files.provider.RecentFilePolicyTest` (15 tests) for sorting stability, the
+  exclusion rules (hidden paths, temp/database sidecars, `Android/data`, `Android/obb`, recycle
+  bin, and user-configured excluded paths), and the MediaStore seconds-to-milliseconds conversion.
 
 ### Legacy data migration
 

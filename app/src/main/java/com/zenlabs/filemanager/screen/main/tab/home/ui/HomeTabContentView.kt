@@ -5,7 +5,6 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -945,10 +944,14 @@ private fun HomeCategoryTile(
                 imageVector = category.icon,
                 contentDescription = null
             )
+            // Static, single-line label. No marquee/scrolling text so the category names stay
+            // readable and never move. Ellipsis is only a safety net for very large font scales.
             Text(
-                modifier = Modifier.basicMarquee(velocity = 90.dp),
                 text = category.name,
-                maxLines = 1
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
             )
         }
     }

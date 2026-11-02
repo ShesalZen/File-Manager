@@ -89,7 +89,7 @@
             called with on-device models.
 
             The library auto-merges MlKitComponentDiscoveryService and MlKitInitProvider into
-            every app's manifest via its own AAR manifests. Since File Manager by ZenLabs calls the ML Kit API
+            every app's manifest via its own AAR manifests. Since File Manager calls the ML Kit API
             explicitly (not through auto-init), these entries are redundant here.
             We suppress them with tools:node="remove" so they don't appear in the merged
             manifest and don't raise privacy concerns for users or downstream reviewers.

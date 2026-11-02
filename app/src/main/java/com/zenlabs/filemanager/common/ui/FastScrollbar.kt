@@ -34,7 +34,7 @@ import kotlin.math.roundToInt
  * Sora Editor styled scrollbar:
  *  - 10.dp width, min 60.dp thumb length (matching Sora Editor RenderingConstants)
  *  - Slide & fade animations on hide/show (translating horizontally off-screen)
- *  - Full-height track background revealed when dragging / pressed
+ *  - Floating thumb only: no visible track/bar is drawn behind it (Google Photos style)
  *  - Immediate hold-and-drag touch interception with direct proportional seeking
  */
 @Composable
@@ -161,7 +161,6 @@ private fun Modifier.soraScrollbarImpl(
     var trackHeightPx by remember { mutableFloatStateOf(0f) }
 
     // Sora Editor color scheme tokens adapted to Compose Material Theme
-    val trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
     val thumbColorNormal = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
     val thumbColorPressed = MaterialTheme.colorScheme.primary
 
@@ -188,17 +187,9 @@ private fun Modifier.soraScrollbarImpl(
             val thumbLeft = size.width - scrollbarWidthPx + slideXPx
             val cornerRadius = CornerRadius(cornerRadiusDp.toPx(), cornerRadiusDp.toPx())
 
-            // Full-height Track (drawn when holding/dragging, matching Sora Editor behavior)
-            if (isHolding) {
-                drawRoundRect(
-                    color = trackColor.copy(alpha = trackColor.alpha * alpha),
-                    topLeft = Offset(thumbLeft, 0f),
-                    size = Size(scrollbarWidthPx, size.height),
-                    cornerRadius = cornerRadius
-                )
-            }
-
-            // Thumb
+            // Thumb only: the track/bar behind it is intentionally not drawn so the scrollbar
+            // reads as a floating knob with no visible channel (Google Photos style). Dragging,
+            // fast scrolling, and section seeking are all preserved by the pointerInput below.
             val currentThumbColor = if (isHolding) thumbColorPressed else thumbColorNormal
             drawRoundRect(
                 color = currentThumbColor.copy(alpha = currentThumbColor.alpha * alpha),

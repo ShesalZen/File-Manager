@@ -54,11 +54,8 @@ import java.io.InputStream
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.io.Writer
-import java.text.DecimalFormat
 import java.text.SimpleDateFormat
 import java.util.UUID
-import kotlin.math.log10
-import kotlin.math.pow
 import kotlin.random.Random
 
 // =============================================================================
@@ -656,14 +653,13 @@ fun Long.toFormattedDate(
     return SimpleDateFormat(format).format(this)
 }
 
-fun Long.toFormattedSize(): String {
-    if (this <= 0) return "0 B"
-    val units = arrayOf("B", "KiB", "MiB", "GiB", "TiB")
-    val digitGroups = (log10(this.toDouble()) / log10(1024.0)).toInt()
-    return DecimalFormat("#,##0.#").format(
-        this / 1024.0.pow(digitGroups.toDouble())
-    ) + " " + units[digitGroups]
-}
+/**
+ * Formats a byte count using decimal (base-1000) units: B, KB, MB, GB, TB.
+ *
+ * Delegates to [FileSizeFormat] so every screen shows the same decimal size string.
+ * The underlying byte values are never changed; only their presentation is.
+ */
+fun Long.toFormattedSize(): String = FileSizeFormat.format(this)
 
 fun Long.toFormattedTime(): String {
     val totalSeconds = this / 1000

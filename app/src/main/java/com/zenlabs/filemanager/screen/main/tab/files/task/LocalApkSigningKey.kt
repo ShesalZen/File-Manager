@@ -85,7 +85,7 @@ object LocalApkSigningKey {
         keyPairGenerator.initialize(2048, SecureRandom())
         val keyPair = keyPairGenerator.generateKeyPair()
 
-        val issuer = X500Name("CN=ZenLabs APK Merge, O=File Manager by ZenLabs")
+        val issuer = X500Name("CN=ZenLabs APK Merge, O=ZenLabs")
         val serial = BigInteger(64, SecureRandom())
         val notBefore = Date(System.currentTimeMillis() - 24 * 60 * 60 * 1000L) // Yesterday
         val notAfter = Date(System.currentTimeMillis() + 30L * 365 * 24 * 60 * 60 * 1000L) // ~30 years

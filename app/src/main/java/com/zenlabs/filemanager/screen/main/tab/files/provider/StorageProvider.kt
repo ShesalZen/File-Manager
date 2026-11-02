@@ -592,19 +592,31 @@ object StorageProvider {
 
     private val recentlyMutatedFiles = ConcurrentHashMap<String, Long>()
 
-    private val tempDbSuffixes = listOf(
-        ".tmp", ".temp", ".bak", ".log",
-        ".crdownload", ".part",
-        "-shm", "-wal", "-journal",
-        ".db-shm", ".db-wal", ".db-journal"
-    )
+    // Bounded Recent-files cache. Recent is driven by a recency window (see below) instead of a
+    // whole-device walk, so the candidate set stays small and is safe to page over from memory.
+    @Volatile
+    private var cachedRecentCandidates: ArrayList<RecentFile>? = null
+    @Volatile
+    private var cachedRecentKey: String = ""
+    @Volatile
+    private var cachedRecentTimestamp: Long = 0L
 
-    private val skippedSystemDirNames = setOf(
-        "lost+found", ".thumbnails", ".Trash", ".trashed", ".recycle", "recyclebin"
-    )
+    /**
+     * How far back the Recent screen looks. Anything older than this is not surfaced as "recent";
+     * it stays reachable through its folder or All Files. A month of activity is covered while
+     * avoiding a full filesystem scan.
+     */
+    private const val DEFAULT_RECENT_WINDOW_DAYS = 30
+
+    /**
+     * Hard upper bound on the number of MediaStore rows read for Recent, newest first. This bounds
+     * memory only; because the query is sorted newest-first it never drops the most recent files.
+     */
+    private const val MAX_RECENT_CANDIDATES = 3000
 
     fun invalidateRecentFilesCache() {
         cachedAllDeviceTimestamp = 0L
+        cachedRecentTimestamp = 0L
         lastMutationCounter++
     }
 
@@ -637,21 +649,15 @@ object StorageProvider {
         hideTempAndDb: Boolean,
         excludedPaths: Set<String>,
         recycleBinPath: String
-    ): Boolean {
-        if (path.isEmpty() || name.isEmpty()) return false
-        if (recycleBinPath.isNotEmpty() && path.startsWith(recycleBinPath)) return false
-        if (!showHiddenFiles && name.startsWith(".")) return false
-        if (excludeHiddenPaths && (name.startsWith(".") || path.contains("/.", ignoreCase = false))) return false
-        for (excluded in excludedPaths) {
-            if (excluded.isNotEmpty() && path.startsWith(excluded)) return false
-        }
-        if (hideTempAndDb) {
-            if (path.contains("/Android/data/") || path.contains("/Android/obb/")) return false
-            val lowerName = name.lowercase()
-            if (tempDbSuffixes.any { lowerName.endsWith(it) }) return false
-        }
-        return true
-    }
+    ): Boolean = !RecentFilePolicy.isExcludedPath(
+        path = path,
+        name = name,
+        showHiddenFiles = showHiddenFiles,
+        excludeHiddenPaths = excludeHiddenPaths,
+        hideTempAndDb = hideTempAndDb,
+        excludedPaths = excludedPaths,
+        recycleBinPath = recycleBinPath
+    )
 
     @Synchronized
     private fun collectAllDeviceFilesSorted(): ArrayList<RecentFile> {
@@ -677,7 +683,7 @@ object StorageProvider {
                 return
             }
             val existing = fileMap[path]
-            if (existing == null || timestampMs > existing.lastModified * 1000L) {
+            if (existing == null || timestampMs > existing.lastModified) {
                 val holder = LocalFileHolder(
                     file = file,
                     cachedName = name,
@@ -688,7 +694,7 @@ object StorageProvider {
                 fileMap[path] = RecentFile(
                     name = name,
                     path = path,
-                    lastModified = timestampMs / 1000L,
+                    lastModified = timestampMs,
                     file = holder
                 )
             }
@@ -722,7 +728,7 @@ object StorageProvider {
             if (depth > 14) return
             val dirPath = dir.absolutePath
             val dirName = dir.name
-            if (dirName in skippedSystemDirNames) return
+            if (dirName in RecentFilePolicy.SKIPPED_SYSTEM_DIR_NAMES) return
             if (recycleBinPath.isNotEmpty() && dirPath.startsWith(recycleBinPath)) return
             if ((excludeHiddenPaths || !showHiddenFiles) && dirName.startsWith(".")) return
             if (hideTempAndDb && (dirPath.endsWith("/Android/data") || dirPath.endsWith("/Android/obb"))) return
@@ -780,7 +786,10 @@ object StorageProvider {
                     val modSec = cursor.getLong(colMod)
                     val addSec = if (colAdd >= 0) cursor.getLong(colAdd) else 0L
                     val bestSec = maxOf(modSec, addSec)
-                    val timestampMs = maxOf(bestSec * 1000L, f.lastModified())
+                    val timestampMs = maxOf(
+                        RecentFilePolicy.mediaStoreSecondsToMillis(bestSec),
+                        f.lastModified()
+                    )
                     val size = if (colSize >= 0) cursor.getLong(colSize).takeIf { it > 0 } ?: f.length() else f.length()
                     addOrUpdateFile(f, name, size, timestampMs)
                 }
@@ -799,59 +808,46 @@ object StorageProvider {
         return sorted
     }
 
-    private var cachedLegacyRecentFiles: ArrayList<RecentFile>? = null
-    private var cachedLegacyRecentKey: String = ""
-    private var cachedLegacyRecentTimestamp: Long = 0L
+    private fun recentWindowMs(recentHours: Int): Long {
+        val hours = if (recentHours > 0) recentHours else DEFAULT_RECENT_WINDOW_DAYS * 24
+        return hours.toLong() * 60L * 60L * 1000L
+    }
 
-    private fun getLegacyMediaStoreRecentFiles(
-        recentHours: Int = 24 * 5,
-        limit: Int = 100
-    ): ArrayList<RecentFile> {
-        val effectiveHours = if (recentHours <= 0) 48 else recentHours
-        val effectiveLimit = if (limit <= 0) 200 else limit
-        val now = System.currentTimeMillis()
-        val prefs = globalClass.preferencesManager
-        val cacheKey = "$effectiveHours:$effectiveLimit:${prefs.showHiddenFiles}:${prefs.removeHiddenPathsFromRecentFiles}:${prefs.hideTempAndDbFilesFromRecentFiles}:${prefs.excludedPathsFromRecentFiles.joinToString()}:$lastMutationCounter"
-        if (cachedLegacyRecentFiles != null && cachedLegacyRecentKey == cacheKey && (now - cachedLegacyRecentTimestamp < RECENT_CACHE_TTL_MS)) {
-            return ArrayList(cachedLegacyRecentFiles!!)
-        }
+    /**
+     * The MediaStore selection used for the Recent list.
+     *
+     * It is shared by the list build and the lightweight change-detection query so that both
+     * observe exactly the same set of files.
+     */
+    private data class RecentMediaStoreQuery(
+        val selection: String,
+        val selectionArgs: Array<String>,
+        val sortOrder: String
+    )
 
-        val recentFiles = ArrayList<RecentFile>(effectiveLimit)
-        val contentResolver: ContentResolver = globalClass.contentResolver
-        val showHiddenFiles = prefs.showHiddenFiles
-        val uri: Uri = MediaStore.Files.getContentUri("external")
-        val projection = arrayOf(
-            MediaStore.Files.FileColumns.DATA,
-            MediaStore.Files.FileColumns.DATE_MODIFIED,
-            MediaStore.Files.FileColumns.DISPLAY_NAME,
-            MediaStore.Files.FileColumns.SIZE
-        )
-
-        val selectionClauses = mutableListOf<String>()
-        val selectionArgsList = mutableListOf<String>()
-
-        val time = (System.currentTimeMillis() / 1000) - (effectiveHours * 60 * 60)
-        selectionClauses.add("${MediaStore.Files.FileColumns.DATE_MODIFIED} >= ?")
-        selectionArgsList.add(time.toString())
-
-        selectionClauses.add("${MediaStore.MediaColumns.MIME_TYPE} IS NOT NULL")
-        selectionClauses.add("${MediaStore.Files.FileColumns.MEDIA_TYPE} != ${MediaStore.Files.FileColumns.MEDIA_TYPE_NONE}")
+    /**
+     * Builds the MediaStore query that selects files modified inside the recency window, applying
+     * the same exclusion rules as [RecentFilePolicy].
+     */
+    private fun buildRecentMediaStoreQuery(
+        windowMs: Long,
+        showHiddenFiles: Boolean,
+        excludeHiddenPaths: Boolean,
+        hideTempAndDb: Boolean,
+        excludedPaths: Set<String>,
+        recycleBinPath: String
+    ): RecentMediaStoreQuery {
+        val sinceSec = (System.currentTimeMillis() - windowMs) / 1000L
+        val selectionClauses = mutableListOf("${MediaStore.Files.FileColumns.DATE_MODIFIED} >= ?")
+        val selectionArgsList = mutableListOf(sinceSec.toString())
 
         if (!showHiddenFiles) {
             selectionClauses.add("${MediaStore.Files.FileColumns.DISPLAY_NAME} NOT LIKE '.%'")
         }
-
-        val excludedPaths = prefs.excludedPathsFromRecentFiles
-        excludedPaths.forEach { excludedPath ->
-            selectionClauses.add("${MediaStore.Files.FileColumns.DATA} NOT LIKE ?")
-            selectionArgsList.add("$excludedPath%")
-        }
-
-        if (prefs.removeHiddenPathsFromRecentFiles) {
+        if (excludeHiddenPaths) {
             selectionClauses.add("${MediaStore.Files.FileColumns.DATA} NOT LIKE '%/.%'")
         }
-
-        if (prefs.hideTempAndDbFilesFromRecentFiles) {
+        if (hideTempAndDb) {
             listOf(
                 "%.tmp", "%.temp", "%.bak", "%.log",
                 "%.crdownload", "%.part",
@@ -863,13 +859,165 @@ object StorageProvider {
                 selectionArgsList.add(pattern)
             }
         }
+        if (recycleBinPath.isNotEmpty()) {
+            selectionClauses.add("${MediaStore.Files.FileColumns.DATA} NOT LIKE ?")
+            selectionArgsList.add("$recycleBinPath%")
+        }
+        excludedPaths.forEach { excludedPath ->
+            if (excludedPath.isNotEmpty()) {
+                selectionClauses.add("${MediaStore.Files.FileColumns.DATA} NOT LIKE ?")
+                selectionArgsList.add("$excludedPath%")
+            }
+        }
 
-        val selection = selectionClauses.joinToString(" AND ")
-        val selectionArgs = selectionArgsList.toTypedArray()
-        val sortOrder = "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC"
+        return RecentMediaStoreQuery(
+            selection = selectionClauses.joinToString(" AND "),
+            selectionArgs = selectionArgsList.toTypedArray(),
+            sortOrder = "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC"
+        )
+    }
 
+    /**
+     * Modification time (in seconds) of the newest file that matches the Recent query.
+     *
+     * Used as a cheap change-detection signal for the Recent screen: it reads a single row instead
+     * of the whole candidate list. Returns `0L` when nothing matches or the query fails, which
+     * simply means "no change detected".
+     */
+    private fun recentNewestModifiedSeconds(): Long {
+        val prefs = globalClass.preferencesManager
+        val recycleBinPath = runCatching { globalClass.recycleBinDir.file.absolutePath }.getOrDefault("")
+        val query = buildRecentMediaStoreQuery(
+            windowMs = recentWindowMs(-1),
+            showHiddenFiles = prefs.showHiddenFiles,
+            excludeHiddenPaths = prefs.removeHiddenPathsFromRecentFiles,
+            hideTempAndDb = prefs.hideTempAndDbFilesFromRecentFiles,
+            excludedPaths = prefs.excludedPathsFromRecentFiles,
+            recycleBinPath = recycleBinPath
+        )
+        val uri: Uri = MediaStore.Files.getContentUri("external")
+        val projection = arrayOf(MediaStore.Files.FileColumns.DATE_MODIFIED)
+
+        var newest = 0L
+        try {
+            val queryArgs = Bundle().apply {
+                putInt(ContentResolver.QUERY_ARG_LIMIT, 1)
+                putString(ContentResolver.QUERY_ARG_SQL_SELECTION, query.selection)
+                putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, query.selectionArgs)
+                putString(ContentResolver.QUERY_ARG_SQL_SORT_ORDER, query.sortOrder)
+            }
+            globalClass.contentResolver.query(uri, projection, queryArgs, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    newest = cursor.getLong(0)
+                }
+            }
+        } catch (_: Exception) {
+            try {
+                val queryUri = uri.buildUpon().appendQueryParameter("limit", "1").build()
+                globalClass.contentResolver.query(
+                    queryUri, projection, query.selection, query.selectionArgs, query.sortOrder
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        newest = cursor.getLong(0)
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        return newest
+    }
+
+    /**
+     * Builds the bounded, newest-first list of "recent" files.
+     *
+     * Recency is based on last-modified time, which is the timestamp the app can obtain reliably
+     * for every provider. The app does not track a separate "last opened" time, so modification
+     * time is used consistently and is never presented as an open time.
+     *
+     * Only two bounded sources feed the list:
+     *  1. files the user created/renamed/copied/edited inside the app ([recentlyMutatedFiles]),
+     *     which are immediately relevant even before MediaStore catches up, and
+     *  2. a MediaStore query restricted to the recency window, sorted newest-first and capped.
+     *
+     * This replaces the previous whole-device walk that could enumerate tens of thousands of files.
+     */
+    @Synchronized
+    private fun collectRecentFilesBounded(windowMs: Long): ArrayList<RecentFile> {
+        val now = System.currentTimeMillis()
+        val prefs = globalClass.preferencesManager
+        val showHiddenFiles = prefs.showHiddenFiles
+        val excludeHiddenPaths = prefs.removeHiddenPathsFromRecentFiles
+        val hideTempAndDb = prefs.hideTempAndDbFilesFromRecentFiles
+        val excludedPaths = prefs.excludedPathsFromRecentFiles
+        val recycleBinPath = runCatching { globalClass.recycleBinDir.file.absolutePath }.getOrDefault("")
+
+        val cacheKey = "$windowMs:$showHiddenFiles:$excludeHiddenPaths:$hideTempAndDb:${excludedPaths.joinToString()}:$lastMutationCounter"
+        cachedRecentCandidates?.let { cached ->
+            if (cachedRecentKey == cacheKey && (now - cachedRecentTimestamp < RECENT_CACHE_TTL_MS)) {
+                return cached
+            }
+        }
+
+        val byPath = HashMap<String, RecentFile>(512)
+
+        fun addCandidate(file: File, name: String, size: Long, lastModifiedMs: Long) {
+            val path = file.absolutePath
+            if (RecentFilePolicy.isExcludedPath(
+                    path, name, showHiddenFiles, excludeHiddenPaths, hideTempAndDb, excludedPaths, recycleBinPath
+                )
+            ) {
+                return
+            }
+            val existing = byPath[path]
+            if (existing == null || lastModifiedMs > existing.lastModified) {
+                byPath[path] = RecentFile(
+                    name = name,
+                    path = path,
+                    lastModified = lastModifiedMs,
+                    file = LocalFileHolder(
+                        file = file,
+                        cachedName = name,
+                        cachedIsDir = false,
+                        cachedSize = size,
+                        cachedLastModified = lastModifiedMs
+                    )
+                )
+            }
+        }
+
+        // 1. Files created/renamed/copied/edited through this app are always recent.
+        val staleMutated = mutableListOf<String>()
+        for ((path, recordedTime) in recentlyMutatedFiles) {
+            val f = File(path)
+            if (f.exists() && f.isFile) {
+                addCandidate(f, f.name, f.length(), maxOf(f.lastModified(), recordedTime))
+            } else if (!f.exists()) {
+                staleMutated.add(path)
+            }
+        }
+        staleMutated.forEach { recentlyMutatedFiles.remove(it) }
+
+        // 2. MediaStore, restricted to the recency window and sorted newest-first.
+        val uri: Uri = MediaStore.Files.getContentUri("external")
+        val recentQuery = buildRecentMediaStoreQuery(
+            windowMs = windowMs,
+            showHiddenFiles = showHiddenFiles,
+            excludeHiddenPaths = excludeHiddenPaths,
+            hideTempAndDb = hideTempAndDb,
+            excludedPaths = excludedPaths,
+            recycleBinPath = recycleBinPath
+        )
+        val selection = recentQuery.selection
+        val selectionArgs = recentQuery.selectionArgs
+        val sortOrder = recentQuery.sortOrder
+
+        val projection = arrayOf(
+            MediaStore.Files.FileColumns.DATA,
+            MediaStore.Files.FileColumns.DATE_MODIFIED,
+            MediaStore.Files.FileColumns.DISPLAY_NAME,
+            MediaStore.Files.FileColumns.SIZE
+        )
         val queryArgs = Bundle().apply {
-            putInt(ContentResolver.QUERY_ARG_LIMIT, effectiveLimit)
+            putInt(ContentResolver.QUERY_ARG_LIMIT, MAX_RECENT_CANDIDATES)
             putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
             putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selectionArgs)
             putString(ContentResolver.QUERY_ARG_SQL_SORT_ORDER, sortOrder)
@@ -879,13 +1027,11 @@ object StorageProvider {
 
         var cursor: Cursor? = null
         try {
-            cursor = contentResolver.query(uri, projection, queryArgs, null)
+            cursor = globalClass.contentResolver.query(uri, projection, queryArgs, null)
         } catch (_: Exception) {
-            val queryUri = uri.buildUpon().apply {
-                appendQueryParameter("limit", effectiveLimit.toString())
-            }.build()
+            val queryUri = uri.buildUpon().appendQueryParameter("limit", MAX_RECENT_CANDIDATES.toString()).build()
             try {
-                cursor = contentResolver.query(queryUri, projection, selection, selectionArgs, sortOrder)
+                cursor = globalClass.contentResolver.query(queryUri, projection, selection, selectionArgs, sortOrder)
             } catch (_: Exception) {}
         }
 
@@ -895,53 +1041,37 @@ object StorageProvider {
             val columnName = it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DISPLAY_NAME)
             val columnSize = it.getColumnIndex(MediaStore.Files.FileColumns.SIZE)
 
-            while (it.moveToNext() && recentFiles.size < effectiveLimit) {
-                val filePath = it.getString(columnIndexPath)
-                val name = it.getString(columnName)
-                val lastModified = it.getLong(columnLastModified)
-                val size = if (columnSize >= 0) it.getLong(columnSize) else 0L
-
-                if (!filePath.isNullOrEmpty() && !name.isNullOrEmpty()) {
-                    val mtimeMs = lastModified * 1000L
-                    val holder = LocalFileHolder(
-                        file = File(filePath),
-                        cachedName = name,
-                        cachedIsDir = false,
-                        cachedSize = size,
-                        cachedLastModified = mtimeMs
-                    )
-                    recentFiles.add(
-                        RecentFile(
-                            name = name,
-                            path = filePath,
-                            lastModified = lastModified,
-                            file = holder
-                        )
-                    )
-                }
+            while (it.moveToNext()) {
+                val filePath = it.getString(columnIndexPath) ?: continue
+                val name = it.getString(columnName) ?: continue
+                val f = File(filePath)
+                if (!f.exists() || f.isDirectory) continue
+                val size = if (columnSize >= 0) it.getLong(columnSize).takeIf { s -> s > 0 } ?: f.length() else f.length()
+                val mtimeMs = RecentFilePolicy.mediaStoreSecondsToMillis(it.getLong(columnLastModified))
+                addCandidate(f, name, size, maxOf(mtimeMs, f.lastModified()))
             }
         }
 
-        cachedLegacyRecentFiles = ArrayList(recentFiles)
-        cachedLegacyRecentKey = cacheKey
-        cachedLegacyRecentTimestamp = now
-        return recentFiles
+        val ordered = RecentFilePolicy.sortNewestFirst(byPath.values) { it.lastModified }
+        val bounded = if (ordered.size > MAX_RECENT_CANDIDATES) {
+            ArrayList(ordered.subList(0, MAX_RECENT_CANDIDATES))
+        } else {
+            ArrayList(ordered)
+        }
+
+        cachedRecentCandidates = bounded
+        cachedRecentKey = cacheKey
+        cachedRecentTimestamp = System.currentTimeMillis()
+        return bounded
     }
 
     fun getRawRecentFiles(
         recentHours: Int = -1,
         limit: Int = 100
     ): ArrayList<RecentFile> {
-        val isExtensiveScan = !globalClass.preferencesManager.removeHiddenPathsFromRecentFiles
-        if (!isExtensiveScan) {
-            return getLegacyMediaStoreRecentFiles(
-                recentHours = if (recentHours <= 0) 24 else recentHours,
-                limit = if (limit <= 0) 25 else limit
-            )
-        }
-        val allSorted = collectAllDeviceFilesSorted()
-        val effectiveLimit = if (limit <= 0) allSorted.size else minOf(limit, allSorted.size)
-        return ArrayList(allSorted.subList(0, effectiveLimit))
+        val candidates = collectRecentFilesBounded(recentWindowMs(recentHours))
+        val effectiveLimit = if (limit <= 0) candidates.size else minOf(limit, candidates.size)
+        return ArrayList(candidates.subList(0, effectiveLimit))
     }
 
     private fun applySorting(
@@ -976,24 +1106,11 @@ object StorageProvider {
         offset: Int = 0,
         sortingPrefs: FileSortingPrefs? = null
     ): ArrayList<LocalFileHolder> {
-        val isExtensiveScan = !globalClass.preferencesManager.removeHiddenPathsFromRecentFiles
-        if (!isExtensiveScan) {
-            val legacy = getLegacyMediaStoreRecentFiles(
-                recentHours = if (recentHours <= 0) 48 else recentHours,
-                limit = limit + offset
-            ).map { it.file }
-            val sortedLegacy = applySorting(legacy, sortingPrefs)
-            if (offset >= sortedLegacy.size) return arrayListOf()
-            val end = minOf(offset + limit, sortedLegacy.size)
-            return ArrayList(sortedLegacy.subList(offset, end))
-        }
-        val allSorted = collectAllDeviceFilesSorted()
+        // Recent is bounded by a recency window instead of a whole-device walk: only files modified
+        // inside the window (plus files mutated through the app) are considered, newest first.
+        val candidates = collectRecentFilesBounded(recentWindowMs(recentHours))
         val configuredMax = globalClass.preferencesManager.recentFilesLimit
-        val capped = if (configuredMax > 0) {
-            allSorted.take(configuredMax)
-        } else {
-            allSorted
-        }
+        val capped = if (configuredMax > 0) candidates.take(configuredMax) else candidates
         val holders = applySorting(capped.map { it.file }, sortingPrefs)
         if (offset >= holders.size) return arrayListOf()
         val end = minOf(offset + limit, holders.size)
@@ -1013,8 +1130,15 @@ object StorageProvider {
     }
 
     fun getCategoryQuickCheck(type: Int): Pair<Int, Long> {
-        if (type == VirtualFileHolder.RECENT || type == VirtualFileHolder.ALL_FILES) {
+        if (type == VirtualFileHolder.ALL_FILES) {
             return Pair(lastMutationCounter.toInt(), cachedAllDeviceTimestamp)
+        }
+        if (type == VirtualFileHolder.RECENT) {
+            // Recent is built from the bounded MediaStore query, not from the all-device walk, so
+            // its change detection has to observe that same query. The count is the mutation
+            // counter (so in-app edits always refresh) and the timestamp is the newest matching
+            // file's modification time.
+            return Pair(lastMutationCounter.toInt(), recentNewestModifiedSeconds())
         }
         val uri: Uri = MediaStore.Files.getContentUri("external")
         val projection = arrayOf(

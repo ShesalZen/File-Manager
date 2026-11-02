@@ -429,7 +429,7 @@ private fun rememberSlides(): List<OnboardingSlide> {
                 icon = Icons.Outlined.FolderOpen,
                 accentStart = primary,
                 accentEnd = secondary,
-                title = "Welcome to File Manager by ZenLabs",
+                title = "Welcome to File Manager",
                 body = "A modern, feature-rich file manager built entirely with Kotlin and Jetpack Compose. " +
                         "Explore, manage, and share your files beautifully."
             ),
@@ -541,7 +541,7 @@ private fun rememberSlides(): List<OnboardingSlide> {
                 accentStart = green,
                 accentEnd = teal,
                 title = "Privacy & Permissions",
-                body = "File Manager by ZenLabs is open-source (GPLv3). Here's exactly why each permission and component is needed:",
+                body = "File Manager is open-source (GPLv3). Here's exactly why each permission and component is needed:",
                 bullets = listOf(
                     "MANAGE_EXTERNAL_STORAGE — full file access for a file manager",
                     "FOREGROUND_SERVICE / DATA_SYNC — background copy/move tasks",

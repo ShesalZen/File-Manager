@@ -193,7 +193,7 @@ class HomeTab : Tab() {
         val mainActivityManager = globalClass.mainActivityManager
         return listOf(
             "recent" to HomeCategory(
-                name = globalClass.getString(R.string.recent_files),
+                name = globalClass.getString(R.string.home_category_recent),
                 icon = Icons.Rounded.History,
                 onClick = {
                     mainActivityManager.replaceCurrentTabWith(
@@ -263,7 +263,7 @@ class HomeTab : Tab() {
                 }
             ),
             "apk" to HomeCategory(
-                name = globalClass.getString(R.string.apk_and_bundles),
+                name = globalClass.getString(R.string.home_category_apk),
                 icon = Icons.Rounded.InstallMobile,
                 onClick = {
                     mainActivityManager.replaceCurrentTabWith(

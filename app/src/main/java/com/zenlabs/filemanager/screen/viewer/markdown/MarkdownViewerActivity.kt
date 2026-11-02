@@ -555,7 +555,7 @@ private fun MarkdownViewerScreen(
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
                                     Text(
-                                        text = "File Manager by ZenLabs",
+                                        text = "File Manager",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = Color(0xFF9E9E9E)
                                     )
