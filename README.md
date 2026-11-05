@@ -119,7 +119,7 @@
 | **SSHJ** | SFTP connections and SSH port-forwarding | `0.39.0` |
 | **Zip4j** | Comprehensive ZIP archive handling & encryption | `2.11.5` |
 | **ZXing** | Offline QR Code generation | `3.5.3` |
-| **ONNX Runtime** | Offline AI semantic vector search models | `1.22.0` |
+| **ONNX Runtime** | Offline AI semantic vector search models | `1.18.0` (mobile build) |
 | **Sora Editor** | Syntax-highlighted text and code editor | `0.23.6` |
 
 ---
@@ -150,7 +150,9 @@
     ```
 
 3.  **Find the APKs**:
-    *   Universal and CPU-split APKs will be located in `app/build/outputs/apk/release/` or `app/build/outputs/apk/debug/`.
+    *   CPU-specific APKs for ARMv7, ARM64, and x86_64 will be located in `app/build/outputs/apk/release/` or `app/build/outputs/apk/debug/`.
+    *   Builds omit the universal APK because it duplicates the native OCR, ONNX Runtime, Tectonic, and archive engines for every architecture. Install the APK matching your device ABI.
+*   Each ABI-specific APK is kept small by shipping the reduced ONNX Runtime mobile build, storing the Tectonic bundle as a single XZ-compressed asset, and dropping unreferenced resources. See [`docs/APK_ANALYSIS.md`](docs/APK_ANALYSIS.md) for the current payload breakdown.
 
 ---
 

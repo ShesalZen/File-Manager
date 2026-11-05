@@ -1,5 +1,5 @@
 param(
-    [string]$ApkPath = "app/build/outputs/apk/debug/app-universal-debug.apk",
+    [string]$ApkPath = "app/build/outputs/apk/release/app-arm64-v8a-release.apk",
     [string]$PackageName = "com.zenlabs.filemanager",
     [string]$Serial = "",
     [switch]$SkipInstall

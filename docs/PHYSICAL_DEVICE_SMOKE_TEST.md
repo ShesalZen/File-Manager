@@ -10,7 +10,7 @@ Record device model, manufacturer, Android/API version/build, ABI (`arm64-v8a`, 
 `x86_64`), free storage, APK path/SHA-256, app build/signing identity, and network fixtures.
 
 ```powershell
-adb install -r -t app\build\outputs\apk\debug\app-universal-debug.apk
+adb install -r -t app\build\outputs\apk\release\app-arm64-v8a-release.apk
 adb logcat -c
 ```
 
@@ -19,9 +19,9 @@ The x86 32-bit APK is intentionally not produced because no compatible `lib7za.s
 
 ## Automated preflight
 
-- [ ] Run `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug --no-daemon --console=plain`.
-- [ ] Run `.\tools\analyze_apks.ps1 -ApkDirectory app\build\outputs\apk\debug -ReportPath docs\APK_ANALYSIS.md`.
-- [ ] Run `.\tools\device_smoke_test.ps1 -ApkPath app\build\outputs\apk\debug\app-universal-debug.apk`.
+- [ ] Run `.\gradlew.bat :app:testDebugUnitTest :app:assembleRelease --no-daemon --console=plain`.
+- [ ] Run `.\tools\analyze_apks.ps1 -ApkDirectory app\build\outputs\apk\release -ReportPath docs\APK_ANALYSIS.md`.
+- [ ] Run `.\tools\device_smoke_test.ps1 -ApkPath app\build\outputs\apk\release\app-arm64-v8a-release.apk`.
 - [ ] Confirm install, launch, restart, process liveness, native directory, and no fatal crash.
 - [ ] After the interactive session, run `adb logcat -d` and retain the log with the report.
 

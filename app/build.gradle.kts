@@ -19,13 +19,6 @@ android {
         targetSdk = 36
         versionCode = 17
         versionName = "2.5"
-
-        // The upstream native executables (lib7za.so and libtectonic.so) are available only for
-        // these ABIs. Excluding x86 prevents us from publishing an APK whose archive and LaTeX
-        // features cannot work. x86_64 emulators remain supported.
-        ndk {
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64")
-        }
     }
 
     dependenciesInfo {
@@ -63,6 +56,7 @@ android {
         }
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
             val releaseSigning = signingConfigs.getByName("release")
             signingConfig = if (releaseSigning.storeFile != null) {
                 releaseSigning
@@ -77,7 +71,12 @@ android {
     }
 
     packaging {
+        jniLibs.useLegacyPackaging = true
         resources {
+            // BouncyCastle ships the constant tables for its Picnic post-quantum key exchange
+            // as Java resources. Nothing in the app uses that key exchange, so the tables are
+            // dead weight in every APK.
+            excludes += "org/bouncycastle/pqc/**"
             excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
         }
     }
@@ -98,16 +97,14 @@ android {
         dexLayoutOptimization = true
     }
 
-    packaging {
-        jniLibs.useLegacyPackaging = true
-    }
-
     splits {
         abi {
             isEnable = true
             reset()
             include("armeabi-v7a", "arm64-v8a", "x86_64")
-            isUniversalApk = true
+            // A universal APK duplicates roughly 35 MB of native runtimes. The three
+            // architecture-specific APKs cover every supported device without that cost.
+            isUniversalApk = false
         }
     }
 
@@ -144,14 +141,12 @@ dependencies {
     implementation(libs.androidx.compose.foundation)
     implementation(libs.androidx.compose.icons.extended)
     implementation(libs.androidx.compose.material3)
-    implementation(libs.androidx.ui.tooling.preview.android)
 
     // Other Jetpack & Android Libraries
     implementation(libs.androidx.datastore)
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.ui)
-    implementation(libs.androidx.media3.ui.compose)
     implementation(libs.androidx.palette.ktx)
 
     // Sora Code Editor
@@ -171,7 +166,6 @@ dependencies {
     implementation(libs.accompanist.systemuicontroller)
     implementation(libs.cascade.compose)
     implementation(libs.compose.swipebox)
-    implementation(libs.grid)
     implementation(libs.reorderable)
     implementation(libs.zoomable)
 
@@ -192,7 +186,6 @@ dependencies {
     // Markdown Rendering
     implementation(libs.markwon.core)
     implementation(libs.markwon.tables)
-    implementation(libs.markwon.latex)
     implementation(libs.markwon.strikethrough)
     implementation(libs.markwon.tasklist)
     implementation(libs.markwon.image)
@@ -201,11 +194,11 @@ dependencies {
     // Networking (Convertio API)
     implementation(libs.okhttp)
 
-    // ONNX Runtime (FileAI Semantic Search)
-    implementation(libs.onnxruntime.android)
+    // ONNX Runtime (FileAI Semantic Search + Magika file type detection)
+    implementation(libs.onnxruntime.mobile)
 
     // PDF Text Extraction & Decryption (kept for password handling + reflow)
-    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+    implementation(libs.pdfbox)
 
     // Jetpack PDF viewer — native text selection + native Find-in-document
     implementation("androidx.pdf:pdf-viewer-fragment:1.0.0-alpha19")
