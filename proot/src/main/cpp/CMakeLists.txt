@@ -239,6 +239,15 @@ set(PROOT_SOURCES
 add_library(cli_obj OBJECT cli/cli.c)
 
 # Build loaders
+# Some linkers such as LLVM LLD support --rosegment, while GNU ld does not.
+# Detect the active linker so standalone GNU/Linux builds remain portable.
+include(CheckLinkerFlag)
+check_linker_flag(C "--rosegment" LOADER_LINKER_HAS_ROSEGMENT)
+set(LOADER_ROSEGMENT_FLAG "")
+if(LOADER_LINKER_HAS_ROSEGMENT)
+    set(LOADER_ROSEGMENT_FLAG ",--rosegment")
+endif()
+
 function(build_loader SUFFIX EXTRA_CFLAGS LOADER_ADDR)
     set(LOADER_TARGET loader_${SUFFIX})
     if(SUFFIX STREQUAL "64")
@@ -250,7 +259,7 @@ function(build_loader SUFFIX EXTRA_CFLAGS LOADER_ADDR)
     add_executable(${LOADER_TARGET} loader/loader.c loader/assembly.S)
     set_target_properties(${LOADER_TARGET} PROPERTIES 
         COMPILE_FLAGS "-fPIC -ffreestanding -g0 ${EXTRA_CFLAGS}"
-        LINK_FLAGS "-static -nostdlib ${EXTRA_CFLAGS} -Wl,-Ttext=${LOADER_ADDR},--rosegment,-z,noexecstack"
+        LINK_FLAGS "-static -nostdlib ${EXTRA_CFLAGS} -Wl,-Ttext=${LOADER_ADDR}${LOADER_ROSEGMENT_FLAG},-z,noexecstack"
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/loader
         OUTPUT_NAME ${LOADER_NAME}
         PREFIX "lib"
