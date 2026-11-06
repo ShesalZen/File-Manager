@@ -34,7 +34,9 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
 
       - name: Install Android SDK components
         run: |
@@ -58,12 +60,14 @@ jobs:
           sudo apt-get install --yes ninja-build gcc-multilib g++-multilib
 
       - name: Build PRoot with sanitizers
+        working-directory: proot
         run: |
-          cmake --preset asan-ubsan -S proot
-          cmake --build --preset asan-ubsan -S proot
+          cmake --preset asan-ubsan
+          cmake --build --preset asan-ubsan
 
       - name: Build and test link2symlink with sanitizers
+        working-directory: link2symlink
         run: |
-          cmake --preset asan-ubsan -S link2symlink
-          cmake --build --preset asan-ubsan -S link2symlink
-          ctest --preset asan-ubsan -S link2symlink
+          cmake --preset asan-ubsan
+          cmake --build --preset asan-ubsan
+          ctest --preset asan-ubsan

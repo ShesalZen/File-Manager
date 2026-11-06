@@ -11,8 +11,9 @@ GitHub Actions runs these checks in the `native-sanitizers` job defined in
 PRoot is compiled with `-fsanitize=address,undefined` and `-fno-omit-frame-pointer` when `PROOT_ENABLE_SANITIZERS=ON`. The freestanding loader is intentionally excluded because it does not link a sanitizer runtime.
 
 ```bash
-cmake --preset asan-ubsan -S proot
-cmake --build --preset asan-ubsan -S proot
+cd proot
+cmake --preset asan-ubsan
+cmake --build --preset asan-ubsan
 ```
 
 This is a build-level native assurance check. A PRoot guest-runtime integration test is not included because it requires a controlled guest rootfs and tracee environment; the existing Android release build remains the authoritative production validation.
@@ -22,9 +23,10 @@ This is a build-level native assurance check. A PRoot guest-runtime integration 
 `link2symlink` has a host-only CTest smoke test. It verifies relative and absolute path resolution and actual `link`/`linkat` symlink creation while the implementation is built with ASan and UBSan.
 
 ```bash
-cmake --preset asan-ubsan -S link2symlink
-cmake --build --preset asan-ubsan -S link2symlink
-ctest --preset asan-ubsan -S link2symlink
+cd link2symlink
+cmake --preset asan-ubsan
+cmake --build --preset asan-ubsan
+ctest --preset asan-ubsan
 ```
 
 The test is enabled only on non-Android UNIX hosts. Android CI should continue to use Gradle's `assembleRelease` task for ABI-specific production builds.

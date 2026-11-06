@@ -188,12 +188,14 @@
 The native modules provide opt-in AddressSanitizer and UndefinedBehaviorSanitizer presets for Linux/macOS hosts with CMake 3.22.1 or newer:
 
 ```bash
-cmake --preset asan-ubsan -S proot
-cmake --build --preset asan-ubsan -S proot
+cd proot
+cmake --preset asan-ubsan
+cmake --build --preset asan-ubsan
 
-cmake --preset asan-ubsan -S link2symlink
-cmake --build --preset asan-ubsan -S link2symlink
-ctest --preset asan-ubsan -S link2symlink
+cd ../link2symlink
+cmake --preset asan-ubsan
+cmake --build --preset asan-ubsan
+ctest --preset asan-ubsan
 ```
 
 See [`docs/native-sanitizer-ci.md`](docs/native-sanitizer-ci.md) for the CI contract and PRoot `openat2` notes.
