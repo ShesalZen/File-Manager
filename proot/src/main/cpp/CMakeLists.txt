@@ -204,7 +204,6 @@ set(PROOT_SOURCES
     ptrace/user.c
     ptrace/wait.c
     extension/extension.c
-    extension/ashmem_memfd/ashmem_memfd.c
     extension/kompat/kompat.c
     extension/fake_id0/chown.c
     extension/fake_id0/chroot.c
@@ -235,6 +234,15 @@ set(PROOT_SOURCES
     extension/fix_symlink_size/fix_symlink_size.c
 )
 
+# ASHMEM is an Android kernel interface whose headers are not available on
+# current Linux hosts. Keep the Android implementation in production builds and
+# use a no-op callback for standalone sanitizer builds.
+if(ANDROID)
+    list(APPEND PROOT_SOURCES extension/ashmem_memfd/ashmem_memfd.c)
+else()
+    list(APPEND PROOT_SOURCES extension/ashmem_memfd/ashmem_memfd_stub.c)
+endif()
+
 # We need a probe object to determine objcopy parameters
 add_library(cli_obj OBJECT cli/cli.c)
 
@@ -242,7 +250,7 @@ add_library(cli_obj OBJECT cli/cli.c)
 # Some linkers such as LLVM LLD support --rosegment, while GNU ld does not.
 # Detect the active linker so standalone GNU/Linux builds remain portable.
 include(CheckLinkerFlag)
-check_linker_flag(C "--rosegment" LOADER_LINKER_HAS_ROSEGMENT)
+check_linker_flag(C "-Wl,--rosegment" LOADER_LINKER_HAS_ROSEGMENT)
 set(LOADER_ROSEGMENT_FLAG "")
 if(LOADER_LINKER_HAS_ROSEGMENT)
     set(LOADER_ROSEGMENT_FLAG ",--rosegment")
