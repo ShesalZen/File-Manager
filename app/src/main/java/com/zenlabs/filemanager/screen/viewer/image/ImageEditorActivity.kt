@@ -31,15 +31,15 @@ class ImageEditorActivity : ViewerActivity() {
     override fun onReady(instance: ViewerInstance) {
         val uri = instance.uri
         val extraPath = intent.getStringExtra("extra_file_path")
-        val bitmap = loadBitmapFromUri(this, uri)
+        lifecycleScope.launch {
+            val bitmap = withContext(Dispatchers.IO) { loadBitmapFromUri(this@ImageEditorActivity, uri) }
+            if (bitmap == null) {
+                showMsg("Failed to load image for editing.")
+                finish()
+                return@launch
+            }
 
-        if (bitmap == null) {
-            showMsg("Failed to load image for editing.")
-            finish()
-            return
-        }
-
-        setContent {
+            setContent {
             FileExplorerTheme {
                 SafeSurface(enableStatusBarsPadding = false) {
                     ImageEditorScreen(
@@ -76,21 +76,49 @@ class ImageEditorActivity : ViewerActivity() {
                     )
                 }
             }
+            }
         }
     }
 
     private fun loadBitmapFromUri(context: Context, uri: Uri): Bitmap? {
         return try {
-            context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                val options = BitmapFactory.Options().apply {
-                    inMutable = true // Allow in-place edits/canvas draws
-                }
-                BitmapFactory.decodeStream(inputStream, null, options)
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                BitmapFactory.decodeStream(input, null, bounds)
+            }
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+            val options = BitmapFactory.Options().apply {
+                inSampleSize = calculateSampleSize(bounds.outWidth, bounds.outHeight)
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+                inMutable = true
+            }
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                BitmapFactory.decodeStream(input, null, options)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load bitmap", e)
             null
         }
+    }
+
+    private fun calculateSampleSize(width: Int, height: Int): Int {
+        val runtime = Runtime.getRuntime()
+        val usedHeap = runtime.totalMemory() - runtime.freeMemory()
+        val availableHeap = (runtime.maxMemory() - usedHeap).coerceAtLeast(1L)
+        val heapPixelBudget = (availableHeap / 4L * 0.25).toLong().coerceAtLeast(1L)
+        val maxPixels = minOf(4096L * 4096L, heapPixelBudget)
+        var sample = 1
+        while (
+            sample < 1024 && (
+                ((width + sample - 1L) / sample) * ((height + sample - 1L) / sample) > maxPixels ||
+                (width + sample - 1L) / sample > 4096L ||
+                (height + sample - 1L) / sample > 4096L
+            )
+        ) {
+            sample *= 2
+        }
+        return sample
     }
 
     /** Save directly to the real filesystem path — most reliable method. */

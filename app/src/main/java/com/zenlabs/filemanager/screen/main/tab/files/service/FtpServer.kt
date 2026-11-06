@@ -1,42 +1,77 @@
 package com.zenlabs.filemanager.screen.main.tab.files.service
 
 import android.os.Environment
+import com.zenlabs.filemanager.common.PathContainment
 import java.io.*
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.Semaphore
 import kotlin.concurrent.thread
+
+private const val MAX_CONCURRENT_SESSIONS = 8
+private const val SOCKET_TIMEOUT_MS = 30_000
 
 object FtpServer {
     private var controlSocket: ServerSocket? = null
     private var port = 9999
     private var homeDir = Environment.getExternalStorageDirectory().absolutePath
     private var username = "Anonymous"
+    private var password = ""
     private var anonymous = true
+    private var allowWrite = false
     private var isActive = false
-    private val activeSessions = mutableListOf<FtpSession>()
+    private val activeSessions = Collections.synchronizedList(mutableListOf<FtpSession>())
+    private val sessionSlots = Semaphore(MAX_CONCURRENT_SESSIONS)
 
-    fun configure(port: Int, homeDir: String, username: String, anonymous: Boolean) {
+    fun configure(
+        port: Int,
+        homeDir: String,
+        username: String,
+        password: String = "",
+        anonymous: Boolean = true,
+        allowWrite: Boolean = false
+    ) {
         this.port = port
         this.homeDir = homeDir
         this.username = username
+        this.password = password
         this.anonymous = anonymous
+        this.allowWrite = allowWrite
     }
 
     fun start(onStatusChanged: () -> Unit) {
         if (isActive) return
+        if (!anonymous && password.isEmpty()) {
+            throw IllegalArgumentException("FTP password is required when anonymous access is disabled")
+        }
         isActive = true
         thread {
             try {
                 controlSocket = ServerSocket(port)
                 while (isActive) {
                     val client = controlSocket?.accept() ?: break
-                    val session = FtpSession(client, homeDir, username, anonymous)
+                    if (!sessionSlots.tryAcquire()) {
+                        try {
+                            client.getOutputStream().write("421 Too many connections.\r\n".toByteArray(Charsets.UTF_8))
+                            client.close()
+                        } catch (_: Exception) {}
+                        continue
+                    }
+                    val session = FtpSession(client, homeDir, username, password, anonymous, allowWrite)
                     activeSessions.add(session)
-                    thread { session.run() }
+                    thread {
+                        try {
+                            session.run()
+                        } finally {
+                            activeSessions.remove(session)
+                            sessionSlots.release()
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -54,7 +89,8 @@ object FtpServer {
             controlSocket?.close()
         } catch (_: Exception) {}
         controlSocket = null
-        for (session in activeSessions) {
+        val sessions = synchronized(activeSessions) { activeSessions.toList() }
+        for (session in sessions) {
             session.close()
         }
         activeSessions.clear()
@@ -66,6 +102,7 @@ object FtpServer {
     fun getHomeDir(): String = homeDir
     fun getUsername(): String = username
     fun isAnonymous(): Boolean = anonymous
+    fun allowsWrite(): Boolean = allowWrite
 
     fun getLocalIpAddress(): String {
         try {
@@ -91,17 +128,24 @@ class FtpSession(
     private val controlSocket: Socket,
     private val homeDir: String,
     private val expectedUser: String,
-    private val anonymous: Boolean
+    private val expectedPassword: String,
+    private val anonymous: Boolean,
+    private val allowWrite: Boolean
 ) {
     private val reader = BufferedReader(InputStreamReader(controlSocket.getInputStream(), "UTF-8"))
     private val writer = BufferedWriter(OutputStreamWriter(controlSocket.getOutputStream(), "UTF-8"))
+    private val root = File(homeDir).canonicalFile
     private var currentDir = "/"
+    private var authenticated = false
+    private var pendingUser: String? = null
+    private var sessionReadOnly = false
     private var passiveServer: ServerSocket? = null
     private var activeHost: String? = null
     private var activePort: Int? = null
     private var renameFromPath: String? = null
 
     fun run() {
+        controlSocket.soTimeout = SOCKET_TIMEOUT_MS
         sendResponse("220 ZenLabs FTP Server ready.")
         try {
             var line: String?
@@ -120,6 +164,7 @@ class FtpSession(
         try { passiveServer?.close() } catch (_: Exception) {}
     }
 
+    @Synchronized
     private fun sendResponse(response: String) {
         try {
             writer.write(response + "\r\n")
@@ -127,17 +172,21 @@ class FtpSession(
         } catch (_: Exception) {}
     }
 
-    private fun getAbsolutePath(relPath: String): String {
-        var path = relPath
-        if (!path.startsWith("/")) {
-            path = if (currentDir == "/") "/$path" else "$currentDir/$path"
-        }
-        val file = if (homeDir == "/" || homeDir.isEmpty()) {
-            File(path)
+    private fun virtualPathFor(relPath: String): String {
+        return if (relPath.startsWith("/")) {
+            relPath
         } else {
-            File(homeDir, path.removePrefix("/"))
+            if (currentDir == "/") "/$relPath" else "$currentDir/$relPath"
         }
-        return file.canonicalPath
+    }
+
+    private fun resolvePath(relPath: String): File {
+        return PathContainment.resolveUnderRoot(root, virtualPathFor(relPath))
+    }
+
+    private fun virtualPathUnderRoot(target: File): String {
+        val relative = root.toPath().relativize(target.canonicalFile.toPath()).toString()
+        return "/" + relative.replace(File.separatorChar, '/').trim('/')
     }
 
     private fun processCommand(line: String) {
@@ -145,90 +194,125 @@ class FtpSession(
         val cmd = parts[0].uppercase()
         val arg = if (parts.size > 1) parts.subList(1, parts.size).joinToString(" ") else ""
 
-        when (cmd) {
-            "USER" -> {
-                if (anonymous) {
-                    sendResponse("230 Anonymous user logged in.")
-                } else {
-                    sendResponse("331 User name okay, need password.")
-                }
-            }
-            "PASS" -> {
-                sendResponse("230 User logged in, proceed.")
-            }
-            "SYST" -> {
-                sendResponse("215 UNIX Type: L8")
-            }
-            "FEAT" -> {
-                sendResponse("211-Features:\r\n UTF8\r\n211 End")
-            }
-            "OPTS" -> {
-                if (arg.uppercase() == "UTF8 ON") {
-                    sendResponse("200 UTF8 Option Enabled")
-                } else {
-                    sendResponse("501 Option not understood")
-                }
-            }
-            "PWD" -> {
-                sendResponse("257 \"$currentDir\" is current directory.")
-            }
-            "TYPE" -> {
-                sendResponse("200 Type set to $arg")
-            }
-            "PASV" -> {
-                enterPassiveMode()
-            }
-            "PORT" -> {
-                enterActiveMode(arg)
-            }
-            "LIST" -> {
-                thread { handleList(arg, detailed = true) }
-            }
-            "NLST" -> {
-                thread { handleList(arg, detailed = false) }
-            }
-            "CWD" -> {
-                handleCwd(arg)
-            }
-            "CDUP" -> {
-                handleCwd("..")
-            }
-            "SIZE" -> {
-                handleSize(arg)
-            }
-            "RETR" -> {
-                thread { handleRetrieve(arg) }
-            }
-            "STOR" -> {
-                thread { handleStore(arg) }
-            }
-            "DELE" -> {
-                handleDelete(arg)
-            }
-            "MKD" -> {
-                handleMakeDir(arg)
-            }
-            "RMD" -> {
-                handleRemoveDir(arg)
-            }
-            "RNFR" -> {
-                renameFromPath = getAbsolutePath(arg)
-                sendResponse("350 File exists, ready for destination name.")
-            }
-            "RNTO" -> {
-                handleRenameTo(arg)
-            }
-            "NOOP" -> {
-                sendResponse("200 OK")
-            }
-            "QUIT" -> {
-                sendResponse("221 Goodbye.")
-                close()
-            }
-            else -> {
-                sendResponse("502 Command not implemented.")
-            }
+        if (!authenticated && cmd !in setOf("USER", "PASS", "QUIT", "NOOP", "AUTH")) {
+            sendResponse("530 Please login with USER and PASS.")
+            return
         }
+
+        try {
+            when (cmd) {
+                "USER" -> handleUser(arg)
+                "PASS" -> handlePassword(arg)
+                "AUTH" -> sendResponse("504 AUTH not supported.")
+                "SYST" -> sendResponse("215 UNIX Type: L8")
+                "FEAT" -> sendResponse("211-Features:\r\n UTF8\r\n211 End")
+                "OPTS" -> {
+                    if (arg.uppercase() == "UTF8 ON") {
+                        sendResponse("200 UTF8 Option Enabled")
+                    } else {
+                        sendResponse("501 Option not understood")
+                    }
+                }
+                "PWD" -> sendResponse("257 \"$currentDir\" is current directory.")
+                "TYPE" -> sendResponse("200 Type set to $arg")
+                "PASV" -> enterPassiveMode()
+                "PORT" -> enterActiveMode(arg)
+                "LIST" -> thread { handleList(arg, detailed = true) }
+                "NLST" -> thread { handleList(arg, detailed = false) }
+                "CWD" -> handleCwd(arg)
+                "CDUP" -> handleCwd("..")
+                "SIZE" -> handleSize(arg)
+                "RETR" -> thread { handleRetrieve(arg) }
+                "STOR" -> {
+                    if (!canModify()) return
+                    thread { handleStore(arg) }
+                }
+                "DELE" -> {
+                    if (!canModify()) return
+                    handleDelete(arg)
+                }
+                "MKD" -> {
+                    if (!canModify()) return
+                    handleMakeDir(arg)
+                }
+                "RMD" -> {
+                    if (!canModify()) return
+                    handleRemoveDir(arg)
+                }
+                "RNFR" -> {
+                    if (!canModify()) return
+                    val from = resolvePath(arg)
+                    if (!from.exists()) {
+                        sendResponse("550 File not found.")
+                    } else {
+                        renameFromPath = from.canonicalPath
+                        sendResponse("350 File exists, ready for destination name.")
+                    }
+                }
+                "RNTO" -> {
+                    if (!canModify()) return
+                    handleRenameTo(arg)
+                }
+                "NOOP" -> sendResponse("200 OK")
+                "QUIT" -> {
+                    sendResponse("221 Goodbye.")
+                    close()
+                }
+                else -> sendResponse("502 Command not implemented.")
+            }
+        } catch (_: SecurityException) {
+            sendResponse("550 Permission denied.")
+        } catch (_: Exception) {
+            sendResponse("451 Requested action aborted.")
+        }
+    }
+
+    private fun handleUser(arg: String) {
+        if (authenticated) {
+            sendResponse("503 Already logged in.")
+            return
+        }
+        val validUser = if (anonymous) arg.equals("anonymous", ignoreCase = true) else arg == expectedUser
+        if (!validUser) {
+            pendingUser = null
+            sendResponse("530 Login incorrect.")
+            return
+        }
+        pendingUser = arg
+        sendResponse("331 User name okay, need password.")
+    }
+
+    private fun handlePassword(arg: String) {
+        val user = pendingUser
+        if (user == null) {
+            sendResponse("503 Send USER first.")
+            return
+        }
+        val validPassword = if (anonymous) true else constantTimeEquals(arg, expectedPassword)
+        if (!validPassword) {
+            pendingUser = null
+            sendResponse("530 Login incorrect.")
+            return
+        }
+        pendingUser = null
+        authenticated = true
+        sessionReadOnly = anonymous || !allowWrite
+        sendResponse("230 User logged in, proceed.")
+    }
+
+    private fun constantTimeEquals(actual: String, expected: String): Boolean {
+        return MessageDigest.isEqual(
+            actual.toByteArray(Charsets.UTF_8),
+            expected.toByteArray(Charsets.UTF_8)
+        )
+    }
+
+    private fun canModify(): Boolean {
+        if (sessionReadOnly) {
+            sendResponse("550 File modification not allowed.")
+            return false
+        }
+        return true
     }
 
     private fun enterPassiveMode() {
@@ -285,6 +369,15 @@ class FtpSession(
     }
 
     private fun handleList(arg: String, detailed: Boolean) {
+        val options = arg.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        val includeHidden = options.any { it.startsWith("-") && it.contains('a') }
+        val requestedPath = options.lastOrNull { !it.startsWith("-") }.orEmpty()
+        val target = try {
+            resolvePath(requestedPath)
+        } catch (_: SecurityException) {
+            sendResponse("550 Permission denied.")
+            return
+        }
         val socket = getDataSocket()
         if (socket == null) {
             sendResponse("425 Can't open data connection.")
@@ -292,11 +385,6 @@ class FtpSession(
         }
         sendResponse("150 Opening ASCII mode data connection for file list.")
         try {
-            val options = arg.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
-            val includeHidden = options.any { it.startsWith("-") && it.contains('a') }
-            val requestedPath = options.lastOrNull { !it.startsWith("-") }.orEmpty()
-            val targetPath = getAbsolutePath(requestedPath)
-            val target = File(targetPath)
             val files = if (target.isDirectory) target.listFiles() ?: emptyArray() else emptyArray()
             val writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream(), "UTF-8"))
             val df = SimpleDateFormat("MMM dd HH:mm", Locale.US)
@@ -322,31 +410,18 @@ class FtpSession(
     }
 
     private fun handleCwd(arg: String) {
-        val target = if (arg == "..") {
-            if (currentDir == "/") {
-                "/"
-            } else {
-                val idx = currentDir.lastIndexOf('/')
-                if (idx == 0) "/" else currentDir.substring(0, idx)
-            }
-        } else if (arg.startsWith("/")) {
-            arg
-        } else {
-            if (currentDir == "/") "/$arg" else "$currentDir/$arg"
-        }
-
-        val absPath = getAbsolutePath(target)
-        val dir = File(absPath)
+        val requested = if (arg == ".." && currentDir == "/") "/" else arg
+        val dir = resolvePath(requested)
         if (!dir.exists() || !dir.isDirectory) {
             sendResponse("550 Directory not found.")
         } else {
-            currentDir = target
+            currentDir = virtualPathUnderRoot(dir)
             sendResponse("250 Directory successfully changed.")
         }
     }
 
     private fun handleSize(arg: String) {
-        val file = File(getAbsolutePath(arg))
+        val file = resolvePath(arg)
         if (file.exists() && file.isFile) {
             sendResponse("213 ${file.length()}")
         } else {
@@ -355,7 +430,12 @@ class FtpSession(
     }
 
     private fun handleRetrieve(arg: String) {
-        val file = File(getAbsolutePath(arg))
+        val file = try {
+            resolvePath(arg)
+        } catch (_: SecurityException) {
+            sendResponse("550 Permission denied.")
+            return
+        }
         if (!file.exists() || !file.isFile) {
             sendResponse("550 File not found.")
             return
@@ -381,7 +461,12 @@ class FtpSession(
     }
 
     private fun handleStore(arg: String) {
-        val file = File(getAbsolutePath(arg))
+        val file = try {
+            resolvePath(arg)
+        } catch (_: SecurityException) {
+            sendResponse("550 Permission denied.")
+            return
+        }
         val socket = getDataSocket()
         if (socket == null) {
             sendResponse("425 Can't open data connection.")
@@ -403,7 +488,7 @@ class FtpSession(
     }
 
     private fun handleDelete(arg: String) {
-        val file = File(getAbsolutePath(arg))
+        val file = resolvePath(arg)
         if (file.exists() && file.isFile) {
             file.delete()
             sendResponse("250 File deleted successfully.")
@@ -413,7 +498,7 @@ class FtpSession(
     }
 
     private fun handleMakeDir(arg: String) {
-        val file = File(getAbsolutePath(arg))
+        val file = resolvePath(arg)
         if (file.mkdirs()) {
             sendResponse("257 \"$arg\" directory created.")
         } else {
@@ -422,7 +507,7 @@ class FtpSession(
     }
 
     private fun handleRemoveDir(arg: String) {
-        val file = File(getAbsolutePath(arg))
+        val file = resolvePath(arg)
         if (file.exists() && file.isDirectory) {
             file.deleteRecursively()
             sendResponse("250 Directory deleted successfully.")
@@ -437,7 +522,7 @@ class FtpSession(
             return
         }
         val from = File(renameFromPath!!)
-        val to = File(getAbsolutePath(arg))
+        val to = resolvePath(arg)
         if (from.exists() && from.renameTo(to)) {
             sendResponse("250 File renamed successfully.")
         } else {

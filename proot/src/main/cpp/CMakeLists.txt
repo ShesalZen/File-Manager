@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.10)
 project(proot C ASM)
 
+# CI-only native assurance switch. Production Android builds leave this OFF.
+option(PROOT_ENABLE_SANITIZERS "Build PRoot with ASan and UBSan" OFF)
+
 # Compatibility flags and headers
 add_definitions(-D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -D__STDC_WANT_LIB_EXT1__=1)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/talloc)
@@ -284,6 +287,11 @@ endif()
 
 add_executable(proot ${PROOT_SOURCES} ${TALLOC_SOURCES})
 add_dependencies(proot cli_obj loader_64)
+if(PROOT_ENABLE_SANITIZERS)
+    target_compile_options(proot PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g)
+    set_property(TARGET proot APPEND_STRING PROPERTY LINK_FLAGS " -fsanitize=address,undefined")
+    message(STATUS "PRoot sanitizers enabled for the main target: address,undefined")
+endif()
 if(HAS_LOADER_32BIT)
     add_dependencies(proot loader_-m32)
 endif()

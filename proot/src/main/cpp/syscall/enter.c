@@ -2121,8 +2121,13 @@ int translate_syscall_enter(Tracee *tracee)
 		 * in SYSARG_2 like openat(), but the open flags live inside the
 		 * open_how struct rather than in a register, so move them into
 		 * SYSARG_3.  The how.resolve flags (RESOLVE_BENEATH, ...) are
-		 * dropped: they reject the absolute host paths PRoot produces,
-		 * and PRoot already keeps path resolution inside the rootfs.  */
+		 * intentionally dropped: they constrain resolution relative to
+		 * the caller's guest directory descriptor, whereas PRoot must
+		 * resolve an absolute host path in the host namespace.  Passing
+		 * them through would reject the translated path or apply the
+		 * constraint to the wrong namespace.  PRoot's guest-root path
+		 * translation and binding checks provide containment instead;
+		 * see docs/native-sanitizer-ci.md for the full contract.  */
 		struct proot_open_how how = {};
 		word_t how_size = peek_reg(tracee, CURRENT, SYSARG_4);
 		if (how_size > sizeof(how))

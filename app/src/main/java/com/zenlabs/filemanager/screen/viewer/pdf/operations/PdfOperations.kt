@@ -33,6 +33,8 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
 import kotlin.math.min
+import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 data class PdfStrokePoint(val x: Float, val y: Float)
 
@@ -69,6 +71,8 @@ enum class TargetImageFormat(val extension: String, val mimeType: String, val co
 object PdfOperations {
 
     private const val TAG = "PdfOperations"
+    private const val MAX_RASTER_DPI = 300
+    private const val MAX_RASTER_DIMENSION = 4096
     private var isPdfBoxInitialized = false
 
     fun ensurePdfBox(context: Context) {
@@ -243,8 +247,14 @@ object PdfOperations {
                         renderer.openPage(i).use { page ->
                             val origW = page.width
                             val origH = page.height
-                            val w = (origW * level.scaleFactor).toInt().coerceAtLeast(1)
-                            val h = (origH * level.scaleFactor).toInt().coerceAtLeast(1)
+                            val dimensions = calculateRasterDimensions(
+                                origW,
+                                origH,
+                                MAX_RASTER_DPI,
+                                level.scaleFactor.toDouble()
+                            )
+                            val w = dimensions.first
+                            val h = dimensions.second
 
                             if (reusableBitmap == null || reusableBitmap!!.isRecycled || reusableBitmap!!.width != w || reusableBitmap!!.height != h) {
                                 reusableBitmap?.recycle()
@@ -254,7 +264,7 @@ object PdfOperations {
                             workingBitmap.eraseColor(AndroidColor.WHITE)
 
                             matrix.reset()
-                            matrix.setScale(level.scaleFactor, level.scaleFactor)
+                            matrix.setScale(w.toFloat() / origW, h.toFloat() / origH)
                             page.render(workingBitmap, null, matrix, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
 
                             stream.reset()
@@ -308,11 +318,11 @@ object PdfOperations {
         pfd.use { descriptor ->
             PdfRenderer(descriptor).use { renderer ->
                 val total = renderer.pageCount
-                val scale = dpi / 72f
                 for (i in 0 until total) {
                     renderer.openPage(i).use { page ->
-                        val w = (page.width * scale).toInt().coerceAtLeast(1)
-                        val h = (page.height * scale).toInt().coerceAtLeast(1)
+                        val dimensions = calculateRasterDimensions(page.width, page.height, dpi)
+                        val w = dimensions.first
+                        val h = dimensions.second
                         val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
                         bitmap.eraseColor(AndroidColor.WHITE)
                         page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
@@ -329,6 +339,27 @@ object PdfOperations {
             }
         }
         outputFiles
+    }
+
+    private fun calculateRasterDimensions(
+        pageWidth: Int,
+        pageHeight: Int,
+        requestedDpi: Int,
+        maxScale: Double = 1.0
+    ): Pair<Int, Int> {
+        val safeDpi = requestedDpi.coerceIn(1, MAX_RASTER_DPI)
+        var scale = min(safeDpi / 72.0, maxScale)
+        val runtime = Runtime.getRuntime()
+        val usedHeap = runtime.totalMemory() - runtime.freeMemory()
+        val availableHeap = (runtime.maxMemory() - usedHeap).coerceAtLeast(1L)
+        val heapPixelBudget = (availableHeap / 4L * 0.25).toLong().coerceAtLeast(1L)
+        val maxPixels = minOf(4096L * 4096L, heapPixelBudget)
+        val pagePixels = maxOf(1L, pageWidth.toLong() * pageHeight.toLong())
+        scale = min(scale, sqrt(maxPixels.toDouble() / pagePixels.toDouble()))
+        scale = min(scale, MAX_RASTER_DIMENSION.toDouble() / maxOf(pageWidth, pageHeight).toDouble())
+        val width = (pageWidth * scale).roundToInt().coerceAtLeast(1)
+        val height = (pageHeight * scale).roundToInt().coerceAtLeast(1)
+        return width to height
     }
 
     /**

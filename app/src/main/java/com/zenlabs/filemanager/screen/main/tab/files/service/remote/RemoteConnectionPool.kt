@@ -15,11 +15,33 @@ object RemoteConnectionPool {
         }
     }
 
+    /**
+     * Returns a pooled client without connecting. Callers can connect on their
+     * own IO dispatcher after composition, avoiding network I/O during UI
+     * recomposition (notably after credential recovery).
+     */
+    fun deferredClientFor(connection: NetworkConnectionModel): RemoteClient {
+        synchronized(lock) {
+            sessions[connection.id]?.let { return it }
+            val pooled = PooledRemoteClient(connection, createRaw(connection))
+            sessions[connection.id] = pooled
+            return pooled
+        }
+    }
+
     fun clientFor(connection: NetworkConnectionModel): RemoteClient {
         synchronized(lock) {
             sessions[connection.id]?.let { return it }
             val pooled = PooledRemoteClient(connection, createRaw(connection))
-            pooled.connect()
+            try {
+                pooled.connect()
+            } catch (e: Exception) {
+                // Keep SFTP clients available so operation-level callers can
+                // surface unknown-key and changed-key failures in their UI.
+                val isSftpVerificationFailure =
+                    e.findSftpUnknownHostKey() != null || e.findSftpHostKeyMismatch() != null
+                if (!isSftpVerificationFailure) throw e
+            }
             sessions[connection.id] = pooled
             return pooled
         }

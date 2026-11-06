@@ -4,6 +4,11 @@ Status: **prepared, not yet executed on a physical device**. No Android device o
 connected to the validation workstation. Automated launch/restart checks are in
 `tools/device_smoke_test.ps1`; APK and unit-test checks run without a device.
 
+Latest host-side gate: **235 release unit tests passed with 0 failures/errors/skips**, and the
+release R8 task completed successfully. See
+[`security-hardening-smoke-test.md`](security-hardening-smoke-test.md) for the security-specific
+matrix and [`native-sanitizer-ci.md`](native-sanitizer-ci.md) for native sanitizer coverage.
+
 ## Test setup
 
 Record device model, manufacturer, Android/API version/build, ABI (`arm64-v8a`, `armeabi-v7a`, or
@@ -19,7 +24,7 @@ The x86 32-bit APK is intentionally not produced because no compatible `lib7za.s
 
 ## Automated preflight
 
-- [ ] Run `.\gradlew.bat :app:testDebugUnitTest :app:assembleRelease --no-daemon --console=plain`.
+- [ ] Run `.\gradlew.bat testReleaseUnitTest :app:assembleRelease --no-daemon --console=plain`.
 - [ ] Run `.\tools\analyze_apks.ps1 -ApkDirectory app\build\outputs\apk\release -ReportPath docs\APK_ANALYSIS.md`.
 - [ ] Run `.\tools\device_smoke_test.ps1 -ApkPath app\build\outputs\apk\release\app-arm64-v8a-release.apk`.
 - [ ] Confirm install, launch, restart, process liveness, native directory, and no fatal crash.

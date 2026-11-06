@@ -18,7 +18,7 @@ class WebSharingForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val url = intent?.getStringExtra("url") ?: "http://127.0.0.1:8080"
+        val url = intent?.getStringExtra("url")?.substringBefore('?') ?: "http://127.0.0.1:8080"
         val isInternet = intent?.getBooleanExtra("isInternet", false) ?: false
 
         val notificationIntent = Intent(this, MainActivity::class.java).apply {

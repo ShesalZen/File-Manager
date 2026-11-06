@@ -13,18 +13,53 @@ import java.security.PublicKey
 import java.security.SecureRandom
 import java.security.Security
 import java.util.Base64
+import net.schmizz.sshj.common.Buffer
+import java.security.MessageDigest
+
+class WebShareTunnelHostKeyMismatchException(
+    message: String = "The public tunnel service rotated its security keys. Please update the application to restore public tunnel sharing."
+) : Exception(message)
+
+class PinnedHostKeyVerifier(
+    private val pinnedFingerprints: Set<String>
+) : HostKeyVerifier {
+    @Volatile
+    var mismatchDetected: Boolean = false
+        private set
+
+    override fun verify(hostname: String, port: Int, key: PublicKey): Boolean {
+        if (hostname != "localhost.run" || port != 22) {
+            mismatchDetected = true
+            throw WebShareTunnelHostKeyMismatchException()
+        }
+        val encoded = Buffer.PlainBuffer().putPublicKey(key).getCompactData()
+        val digest = MessageDigest.getInstance("SHA-256").digest(encoded)
+        val fingerprint = "SHA256:" + Base64.getEncoder().withoutPadding().encodeToString(digest)
+        if (fingerprint !in pinnedFingerprints) {
+            mismatchDetected = true
+            throw WebShareTunnelHostKeyMismatchException()
+        }
+        return true
+    }
+
+    override fun findExistingAlgorithms(hostname: String, port: Int): List<String> = emptyList()
+}
 
 /**
- * Manages device-local SSH keys and host verification for the internet sharing tunnel.
- *
- * Replaces hardcoded private keys with on-device generated keys,
- * and replaces PromiscuousVerifier with a Trust-On-First-Use (TOFU) verifier.
+ * Manages device-local SSH keys and strict host verification for the
+ * internet sharing tunnel.
  */
 object WebShareTunnelKeys {
 
     private const val WEBSHARE_DIR = "webshare"
     private const val KEY_FILE_NAME = "id_rsa.pem"
-    private const val HOST_PUB_KEY_FILE = "localhost.run.pub"
+    // localhost.run currently offers both RSA and Ed25519. These SHA-256
+    // fingerprints are checked against the negotiated SSH public key. A key
+    // rotation or interception fails the tunnel connection closed.
+    private val PINNED_HOST_FINGERPRINTS = setOf(
+        "SHA256:FV8IMJ4IYjYUTnd6on7PqbRjaZf4c1EhhEBgeUdE94I",
+        "SHA256:pG6qrBxubYfWa1Zadu/V0NUgjEDiBds/7e2xzte/QNM"
+    )
 
     init {
         if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
@@ -81,49 +116,8 @@ object WebShareTunnelKeys {
     }
 
     /**
-     * Trust-On-First-Use (TOFU) HostKeyVerifier.
-     * On first connection, records the server host key.
-     * On subsequent connections, ensures the host key matches.
+     * Strict verifier for the localhost.run tunnel. Only the pinned RSA and
+     * Ed25519 keys are accepted; unknown or changed keys are never persisted.
      */
-    fun createTofuVerifier(context: Context): HostKeyVerifier {
-        val dir = File(context.filesDir, WEBSHARE_DIR)
-        if (!dir.exists()) {
-            dir.mkdirs()
-        }
-        val pubKeyFile = File(dir, HOST_PUB_KEY_FILE)
-
-        return object : HostKeyVerifier {
-            override fun verify(hostname: String, port: Int, key: PublicKey): Boolean {
-                val keyBase64 = Base64.getEncoder().encodeToString(key.encoded)
-                if (!pubKeyFile.exists() || pubKeyFile.length() == 0L) {
-                    pubKeyFile.writeText("$hostname $keyBase64\n")
-                    return true
-                }
-
-                val savedKeys = pubKeyFile.readLines()
-                    .map { it.trim() }
-                    .filter { it.isNotEmpty() }
-                    .map { line ->
-                        val parts = line.split(" ")
-                        if (parts.size >= 2) parts[1] else parts[0]
-                    }
-                    .toSet()
-
-                if (keyBase64 in savedKeys) {
-                    return true
-                }
-
-                if (hostname.endsWith("localhost.run")) {
-                    pubKeyFile.appendText("$hostname $keyBase64\n")
-                    return true
-                }
-
-                return false
-            }
-
-            override fun findExistingAlgorithms(hostname: String, port: Int): List<String> {
-                return emptyList()
-            }
-        }
-    }
+    fun createPinnedVerifier(): PinnedHostKeyVerifier = PinnedHostKeyVerifier(PINNED_HOST_FINGERPRINTS)
 }

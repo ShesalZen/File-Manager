@@ -5,15 +5,21 @@
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!--
-        <include .../>
-        <exclude .../>
-        -->
+        <exclude domain="sharedpref" path="network_connections_prefs.xml"/>
+        <exclude domain="sharedpref" path="network_connections_credentials.xml"/>
+        <exclude domain="sharedpref" path="vault_prefs.xml"/>
+        <exclude domain="file" path="sftp_known_hosts"/>
+        <exclude domain="file" path="vault/"/>
+        <exclude domain="file" path="webshare/id_rsa.pem"/>
+        <exclude domain="file" path="webshare/localhost.run.pub"/>
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="sharedpref" path="network_connections_prefs.xml"/>
+        <exclude domain="sharedpref" path="network_connections_credentials.xml"/>
+        <exclude domain="sharedpref" path="vault_prefs.xml"/>
+        <exclude domain="file" path="sftp_known_hosts"/>
+        <exclude domain="file" path="vault/"/>
+        <exclude domain="file" path="webshare/id_rsa.pem"/>
+        <exclude domain="file" path="webshare/localhost.run.pub"/>
     </device-transfer>
-    -->
 </data-extraction-rules>

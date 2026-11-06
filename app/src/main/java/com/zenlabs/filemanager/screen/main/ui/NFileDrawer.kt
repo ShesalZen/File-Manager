@@ -50,6 +50,7 @@ import com.zenlabs.filemanager.screen.main.tab.files.provider.ProviderKind
 import com.zenlabs.filemanager.screen.main.tab.files.provider.StorageProvider
 import com.zenlabs.filemanager.common.showMsg
 import com.zenlabs.filemanager.screen.main.tab.nfile_tools.*
+import com.zenlabs.filemanager.screen.main.tab.nfile_tools.ui.CredentialRecoveryDialog
 import com.zenlabs.filemanager.screen.preferences.PreferencesActivity
 import com.zenlabs.filemanager.common.toFormattedSize
 import com.zenlabs.filemanager.screen.main.tab.files.misc.StorageDeviceType.INTERNAL_STORAGE
@@ -83,6 +84,7 @@ fun NFileDrawerContent(
         mutableStateOf(NetworkConnectionsService.getConnections(context))
     }
     var isRefreshing by remember { mutableStateOf(false) }
+    var pendingCredentialRecovery by remember { mutableStateOf<NetworkConnectionModel?>(null) }
     val editingSections = remember { mutableStateMapOf<String, Boolean>() }
 
     val refreshDrawer: () -> Unit = {
@@ -113,6 +115,14 @@ fun NFileDrawerContent(
         }
     }
 
+    fun openRemoteConnection(conn: NetworkConnectionModel) {
+        manager.replaceCurrentTabWith(
+            FilesTab(RemoteFileHolder.rootHolder(conn)),
+            keepCurrentTabAsParent = true
+        )
+        onNavigate()
+    }
+
     fun toggleItemHidden(itemId: String) {
         val current = preferencesManager.drawerHiddenItems.toMutableSet()
         if (itemId in current) current.remove(itemId) else current.add(itemId)
@@ -128,6 +138,20 @@ fun NFileDrawerContent(
             currentOrder.add(targetIdx, currentOrder.removeAt(idx))
             preferencesManager.drawerSectionsOrder = currentOrder
         }
+    }
+
+    pendingCredentialRecovery?.let { pending ->
+        CredentialRecoveryDialog(
+            connection = pending,
+            onDismissRequest = { pendingCredentialRecovery = null },
+            onRecovered = { recovered ->
+                pendingCredentialRecovery = null
+                remoteConnections = remoteConnections.map {
+                    if (it.id == recovered.id) recovered else it
+                }
+                openRemoteConnection(recovered)
+            }
+        )
     }
 
     ModalDrawerSheet(
@@ -536,12 +560,10 @@ fun NFileDrawerContent(
                                     .clickable {
                                         if (isEditMode) {
                                             toggleItemHidden(itemId)
+                                        } else if (conn.needsCredentialRecovery) {
+                                            pendingCredentialRecovery = conn
                                         } else {
-                                            manager.replaceCurrentTabWith(
-                                                FilesTab(RemoteFileHolder.rootHolder(conn)),
-                                                keepCurrentTabAsParent = true
-                                            )
-                                            onNavigate()
+                                            openRemoteConnection(conn)
                                         }
                                     }
                                     .padding(vertical = 10.dp, horizontal = 12.dp),

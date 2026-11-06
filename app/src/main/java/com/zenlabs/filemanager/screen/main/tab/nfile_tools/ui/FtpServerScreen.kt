@@ -18,6 +18,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -33,7 +34,9 @@ fun FtpServerTabContentView(tab: FtpServerTab) {
 
     var port by remember { mutableStateOf(FtpServer.getPort().toString()) }
     var username by remember { mutableStateOf(FtpServer.getUsername()) }
+    var password by remember { mutableStateOf("") }
     var isAnonymous by remember { mutableStateOf(FtpServer.isAnonymous()) }
+    var allowWrite by remember { mutableStateOf(FtpServer.allowsWrite()) }
     var homePath by remember { mutableStateOf(FtpServer.getHomeDir()) }
     var isRunning by remember { mutableStateOf(FtpServer.isRunning()) }
 
@@ -125,9 +128,35 @@ fun FtpServerTabContentView(tab: FtpServerTab) {
                 enabled = !isRunning,
                 modifier = Modifier.fillMaxWidth()
             )
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(
+                value = password,
+                onValueChange = { if (!isRunning) password = it },
+                label = { Text("FTP Password") },
+                visualTransformation = PasswordVisualTransformation(),
+                enabled = !isRunning,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Checkbox(
+                checked = allowWrite,
+                onCheckedChange = {
+                    if (!isRunning && !isAnonymous) allowWrite = it
+                },
+                enabled = !isRunning && !isAnonymous
+            )
+            Spacer(Modifier.width(8.dp))
+            Text("Allow uploads and file modifications")
+        }
+
+        Spacer(Modifier.height(16.dp))
+
 
         // Quick Storage Selection Chips
         Row(
@@ -200,7 +229,18 @@ fun FtpServerTabContentView(tab: FtpServerTab) {
                     isRunning = false
                 } else {
                     val portVal = port.toIntOrNull() ?: 9999
-                    FtpServer.configure(portVal, homePath, username, isAnonymous)
+                    if (!isAnonymous && password.isEmpty()) {
+                        Toast.makeText(context, "Enter an FTP password before starting", Toast.LENGTH_LONG).show()
+                        return@Button
+                    }
+                    FtpServer.configure(
+                        port = portVal,
+                        homeDir = homePath,
+                        username = if (isAnonymous) "anonymous" else username,
+                        password = password,
+                        anonymous = isAnonymous,
+                        allowWrite = allowWrite && !isAnonymous
+                    )
                     val serviceIntent = Intent(context, FtpForegroundService::class.java)
                     context.startService(serviceIntent)
                     isRunning = true

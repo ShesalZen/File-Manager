@@ -5,7 +5,7 @@ import net.schmizz.sshj.common.SecurityUtils
 import net.schmizz.sshj.sftp.FileMode
 import net.schmizz.sshj.sftp.OpenMode
 import net.schmizz.sshj.sftp.SFTPClient
-import net.schmizz.sshj.transport.verification.PromiscuousVerifier
+import com.zenlabs.filemanager.App.Companion.globalClass
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.io.File
 import java.io.FileInputStream
@@ -52,17 +52,22 @@ class SftpRemoteClient(
         disconnect()
         ensureBouncyCastle()
         val client = SSHClient()
-        client.addHostKeyVerifier(PromiscuousVerifier())
+        val knownHosts = SftpHostKeyStore(java.io.File(globalClass.filesDir, "sftp_known_hosts"))
+        client.addHostKeyVerifier(knownHosts.verifier(conn.host, conn.port))
         client.connectTimeout = 15000
         client.timeout = 15000
 
-        client.connect(conn.host, conn.port)
-        val user = if (conn.username.isEmpty()) "root" else conn.username
-        client.authPassword(user, conn.password)
+        try {
+            client.connect(conn.host, conn.port)
+            val user = if (conn.username.isEmpty()) "root" else conn.username
+            client.authPassword(user, conn.password)
 
-        if (!client.isAuthenticated) {
-            try { client.disconnect() } catch (_: Exception) {}
-            throw Exception("SFTP authentication failed for user '$user'")
+            if (!client.isAuthenticated) {
+                throw Exception("SFTP authentication failed for user '$user'")
+            }
+        } catch (e: Exception) {
+            try { client.close() } catch (_: Exception) {}
+            throw e
         }
 
         ssh = client

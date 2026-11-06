@@ -1,0 +1,27 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 22,
+    "patch": 1
+  },
+  "configurePresets": [
+    {
+      "name": "asan-ubsan",
+      "displayName": "PRoot ASan + UBSan CI build",
+      "description": "Standalone host build with address and undefined-behavior sanitizers",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/ci/asan-ubsan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "PROOT_ENABLE_SANITIZERS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "asan-ubsan",
+      "configurePreset": "asan-ubsan"
+    }
+  ]
+}

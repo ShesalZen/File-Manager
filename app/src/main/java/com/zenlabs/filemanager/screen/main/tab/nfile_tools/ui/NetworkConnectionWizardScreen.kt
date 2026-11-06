@@ -51,6 +51,7 @@ fun NetworkConnectionWizardScreen(tab: NetworkConnectionWizardTab) {
     var webdavProtocol by remember { mutableStateOf("http") }
 
     var isTesting by remember { mutableStateOf(false) }
+    var pendingHostKey by remember { mutableStateOf<SftpUnknownHostKeyException?>(null) }
 
     val smbScanner = remember { LanSmbScanner(context) }
     val isScanningSmb by smbScanner.isScanning.collectAsState()
@@ -445,6 +446,7 @@ fun NetworkConnectionWizardScreen(tab: NetworkConnectionWizardTab) {
                             } catch (e: Exception) {
                                 e.printStackTrace()
                                 testError = e.message ?: e.javaClass.simpleName
+                                pendingHostKey = e.findSftpUnknownHostKey()
                                 false
                             }
                         }
@@ -493,8 +495,16 @@ fun NetworkConnectionWizardScreen(tab: NetworkConnectionWizardTab) {
                         rootPath = rootPath,
                         protocol = webdavProtocol
                     )
-                    NetworkConnectionsService.saveConnection(context, connectionModel)
-                    Toast.makeText(context, "Connection Saved!", Toast.LENGTH_SHORT).show()
+                    val credentialSaved = NetworkConnectionsService.saveConnection(context, connectionModel)
+                    Toast.makeText(
+                        context,
+                        if (credentialSaved) {
+                            "Connection Saved!"
+                        } else {
+                            "Connection metadata saved, but the password could not be secured. Re-enter it when connecting."
+                        },
+                        Toast.LENGTH_LONG
+                    ).show()
                     // Return to previous tab if opened from one, otherwise Home
                     if (tab.parentTab != null) {
                         globalClass.mainActivityManager.canExit()
@@ -510,5 +520,34 @@ fun NetworkConnectionWizardScreen(tab: NetworkConnectionWizardTab) {
                 Text("Save Server")
             }
         }
+    }
+
+    pendingHostKey?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { pendingHostKey = null },
+            title = { Text("Trust SSH Host Key?") },
+            text = {
+                Text(
+                    "First connection to ${pending.host}:${pending.port}.\n\n" +
+                        "Algorithm: ${pending.algorithm}\n" +
+                        "Fingerprint: ${pending.fingerprint}\n\n" +
+                        "Verify this fingerprint with your server administrator before trusting it."
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    SftpHostKeyStore(java.io.File(context.filesDir, "sftp_known_hosts")).trust(pending)
+                    pendingHostKey = null
+                    Toast.makeText(context, "Host key trusted. Test the connection again.", Toast.LENGTH_LONG).show()
+                }) {
+                    Text("Trust and Continue")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingHostKey = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }

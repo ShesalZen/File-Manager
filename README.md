@@ -114,7 +114,7 @@
 | :--- | :--- | :--- |
 | **Kotlin** | Programming Language | `2.2.0` |
 | **Jetpack Compose** | Modern Declarative UI Framework | `2025.07.00` |
-| **Android SDK** | Native Android Platform APIs | API `36` (Android 15+) |
+| **Android SDK** | Native Android Platform APIs | API `36` (Android 16+) |
 | **androidx.pdf** | Native PDFium-backed document viewer | `1.0.0-alpha19` |
 | **SSHJ** | SFTP connections and SSH port-forwarding | `0.39.0` |
 | **Zip4j** | Comprehensive ZIP archive handling & encryption | `2.11.5` |
@@ -127,34 +127,90 @@
 ## 🔨 Building from Source
 
 ### Prerequisites
-*   **JDK**: 17 or higher
-*   **Android SDK**: API level 36+
-*   **Git**: For cloning the repository
+
+* **JDK**: 17
+* **Android SDK**: Platform 36 and Build Tools 36.x
+* **Android NDK**: `28.2.13676358`
+* **CMake**: `3.22.1`
+* **Ninja**: required by the Android native build
+* **Git**: for cloning the repository
 
 ### Build Instructions
 
-1.  **Clone the repository**:
-    ```bash
-    git clone https://github.com/techflyers/ZenLabs-File-Explorer.git
-    cd ZenLabs-File-Explorer
-    ```
+1. **Clone the repository**:
 
-2.  **Build the application**:
-    To compile a debugging version or run tests:
-    ```bash
-    ./gradlew assembleDebug
-    ```
-    To compile the optimized release binaries split by target CPU architecture (ARMv7, ARM64, x86_64):
-    ```bash
-    ./gradlew assembleRelease
-    ```
+   ```bash
+   git clone https://github.com/techflyers/ZenLabs-File-Explorer.git
+   cd ZenLabs-File-Explorer
+   ```
 
-3.  **Find the APKs**:
-    *   CPU-specific APKs for ARMv7, ARM64, and x86_64 will be located in `app/build/outputs/apk/release/` or `app/build/outputs/apk/debug/`.
-    *   Builds omit the universal APK because it duplicates the native OCR, ONNX Runtime, Tectonic, and archive engines for every architecture. Install the APK matching your device ABI.
-*   Each ABI-specific APK is kept small by shipping the reduced ONNX Runtime mobile build, storing the Tectonic bundle as a single XZ-compressed asset, and dropping unreferenced resources. See [`docs/APK_ANALYSIS.md`](docs/APK_ANALYSIS.md) for the current payload breakdown.
+2. **Build the application**:
+
+   To compile a debugging version:
+
+   ```bash
+   ./gradlew assembleDebug
+   ```
+
+   To compile optimized release binaries split by ARMv7, ARM64, and x86_64:
+
+   ```bash
+   ./gradlew assembleRelease
+   ```
+
+   Run the JVM test suite and release R8 check with:
+
+   ```bash
+   ./gradlew testReleaseUnitTest :app:minifyReleaseWithR8
+   ```
+
+3. **Configure release signing** (optional for local builds):
+
+   The release build reads the following optional properties from the ignored `local.properties` file:
+
+   ```properties
+   signing.storeFile=/absolute/path/to/release-key.jks
+   signing.storePassword=your-store-password
+   signing.keyAlias=your-key-alias
+   signing.keyPassword=your-key-password
+   ```
+
+   Never commit signing files or passwords. If no release signing configuration is present, local release builds fall back to the Android debug key and must not be published as official releases.
+
+4. **Find the APKs**:
+
+   * CPU-specific APKs for ARMv7, ARM64, and x86_64 are located in `app/build/outputs/apk/release/` or `app/build/outputs/apk/debug/`.
+   * Builds omit the universal APK because it duplicates the native OCR, ONNX Runtime, Tectonic, and archive engines for every architecture. Install the APK matching your device ABI.
+   * Each ABI-specific APK is kept small by shipping the reduced ONNX Runtime mobile build, storing the Tectonic bundle as a single XZ-compressed asset, and dropping unreferenced resources. See [`docs/APK_ANALYSIS.md`](docs/APK_ANALYSIS.md) for the current payload breakdown.
+
+### Optional native sanitizer checks
+
+The native modules provide opt-in AddressSanitizer and UndefinedBehaviorSanitizer presets for Linux/macOS hosts with CMake 3.22.1 or newer:
+
+```bash
+cmake --preset asan-ubsan -S proot
+cmake --build --preset asan-ubsan -S proot
+
+cmake --preset asan-ubsan -S link2symlink
+cmake --build --preset asan-ubsan -S link2symlink
+ctest --preset asan-ubsan -S link2symlink
+```
+
+See [`docs/native-sanitizer-ci.md`](docs/native-sanitizer-ci.md) for the CI contract and PRoot `openat2` notes.
 
 ---
+
+## 🔐 Security Model
+
+The release includes explicit protections for remote services and locally stored credentials:
+
+* Remote-connection passwords are encrypted with an Android Keystore key and excluded from cloud backup and device transfer. Invalidated keys trigger credential recovery without discarding connection metadata.
+* FTP requires authentication, rejects path traversal, and can enforce read-only mode.
+* Web sharing accepts a generated token through the `session` cookie, `Authorization: Bearer`, or `?token=`. Portal output escapes user-controlled filenames.
+* SFTP host-key changes fail closed, and the public tunnel uses pinned host keys rather than silently trusting a replacement key.
+* Migrated Vault files use authenticated AES-GCM encryption with atomic legacy-format migration.
+
+The physical-device verification matrix is documented in [`docs/security-hardening-smoke-test.md`](docs/security-hardening-smoke-test.md). The broader release checklist is in [`docs/PHYSICAL_DEVICE_SMOKE_TEST.md`](docs/PHYSICAL_DEVICE_SMOKE_TEST.md).
 
 ## 🛡️ Play Protect & Security Scanner Information
 
@@ -162,7 +218,7 @@ File Manager by ZenLabs is distributed directly via GitHub Releases (sideloaded 
 
 * **In-App Linux Terminal (PRoot)**: An optional user-space Linux environment powered by PRoot (the same class of engine used by Termux). Antivirus engines may flag this with dual-use labels such as `Tool.Linux.Proot.1` or `hacktool.proot`. This is an intentional power-user utility, not a root exploit or trojan.
 * **APK Bundle Merge & Install**: Merging split APK bundles (`.apks` / `.xapk`) produces an installable APK signed on-device with a unique, app-local cryptographic key (never the public AOSP testkey).
-* **Internet Sharing Tunnel**: Web sharing establishes reverse proxy tunnels using an on-device generated SSH key and Trust-On-First-Use (TOFU) host verification, without baked-in private keys.
+* **Internet Sharing Tunnel**: Web sharing establishes reverse proxy tunnels using an on-device generated SSH key and pinned host-key verification, without baked-in private keys.
 * **Privileged Access**: Root access is strictly opt-in and is never probed automatically on application startup.
 
 ---
@@ -177,8 +233,13 @@ File Manager by ZenLabs is distributed directly via GitHub Releases (sideloaded 
 
 ### 📝 **Development Guidelines**
 
-- Follow Kotlin coding conventions
-- Write meaningful commit messages
+- Follow Kotlin coding conventions.
+- Keep credentials, signing material, generated profiles, APKs, and local SDK configuration out of Git.
+- Add regression tests for security-sensitive behavior.
+- Run `./gradlew testReleaseUnitTest :app:minifyReleaseWithR8` before submitting a change.
+- Document behavior that still requires a physical device; do not report untested runtime behavior as verified.
+
+For security-sensitive changes, use [`docs/security-hardening-smoke-test.md`](docs/security-hardening-smoke-test.md) and [`docs/PHYSICAL_DEVICE_SMOKE_TEST.md`](docs/PHYSICAL_DEVICE_SMOKE_TEST.md).
 
 ---
 

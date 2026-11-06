@@ -58,6 +58,7 @@ import com.zenlabs.filemanager.screen.main.tab.files.service.remote.NetworkConne
 import com.zenlabs.filemanager.screen.main.tab.files.service.remote.RemoteConnectionPool
 import com.zenlabs.filemanager.screen.main.tab.files.service.remote.RemotePaths
 import com.zenlabs.filemanager.screen.main.tab.files.ui.FileContentIcon
+import com.zenlabs.filemanager.screen.main.tab.nfile_tools.ui.CredentialRecoveryDialog
 import com.zenlabs.filemanager.theme.FileExplorerTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -132,6 +133,7 @@ class FilePickerActivity : BaseActivity() {
 
         var storageDevices by remember { mutableStateOf<List<StorageDevice>>(emptyList()) }
         var remoteConnections by remember { mutableStateOf<List<NetworkConnectionModel>>(emptyList()) }
+        var pendingCredentialRecovery by remember { mutableStateOf<NetworkConnectionModel?>(null) }
 
         LaunchedEffect(Unit) {
             storageDevices = StorageProvider.getStorageDevices(context)
@@ -355,7 +357,13 @@ class FilePickerActivity : BaseActivity() {
                                     (location as PickerLocation.Remote).connection.id == conn.id
                             FilterChip(
                                 selected = isSelected,
-                                onClick = { location = PickerLocation.Remote(conn, "/") },
+                                onClick = {
+                                    if (conn.needsCredentialRecovery) {
+                                        pendingCredentialRecovery = conn
+                                    } else {
+                                        location = PickerLocation.Remote(conn, "/")
+                                    }
+                                },
                                 label = { Text("${conn.type}: ${conn.name}") },
                                 leadingIcon = {
                                     Icon(
@@ -751,6 +759,20 @@ class FilePickerActivity : BaseActivity() {
                     }) {
                         Text(stringResource(R.string.cancel))
                     }
+                }
+            )
+        }
+
+        pendingCredentialRecovery?.let { pending ->
+            CredentialRecoveryDialog(
+                connection = pending,
+                onDismissRequest = { pendingCredentialRecovery = null },
+                onRecovered = { recovered ->
+                    pendingCredentialRecovery = null
+                    remoteConnections = remoteConnections.map {
+                        if (it.id == recovered.id) recovered else it
+                    }
+                    location = PickerLocation.Remote(recovered, "/")
                 }
             )
         }

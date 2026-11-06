@@ -1,16 +1,22 @@
 package com.zenlabs.filemanager.screen.main.tab.files.service
 
 import android.content.Context
+import androidx.annotation.Keep
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import com.zenlabs.filemanager.common.PathContainment
 import java.io.*
 import java.security.MessageDigest
+import java.security.SecureRandom
 import java.text.SimpleDateFormat
 import java.util.*
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.PBEKeySpec
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
+@Keep
 data class VaultFileRecord(
     val id: String,
     val originalName: String,
@@ -23,31 +29,55 @@ data class VaultFileRecord(
 )
 
 object VaultService {
-    private const val MAGIC_TAG = "NFILE_VAULT_V1"
-    private const val SCRAMBLE_SIZE = 8192 // 8 KB
+    private const val PASSWORD_ITERATIONS = 120_000
 
     fun isPasswordSet(context: Context): Boolean {
         val prefs = context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
-        return prefs.contains("vault_password_hash")
+        return prefs.contains("vault_password_hash_v2") || prefs.contains("vault_password_hash")
     }
 
     fun setPassword(context: Context, pin: String) {
         val prefs = context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
-        val salt = System.currentTimeMillis().toString()
-        val saltedPassword = pin + salt
-        val hash = sha256(saltedPassword)
+        val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
+        val hash = derivePasswordHash(pin, salt)
         prefs.edit()
-            .putString("vault_salt", salt)
-            .putString("vault_password_hash", hash)
+            .putString("vault_salt_v2", Base64.getEncoder().encodeToString(salt))
+            .putString("vault_password_hash_v2", Base64.getEncoder().encodeToString(hash))
+            .remove("vault_salt")
+            .remove("vault_password_hash")
             .apply()
     }
 
     fun verifyPassword(context: Context, pin: String): Boolean {
         val prefs = context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
-        val salt = prefs.getString("vault_salt", null) ?: return false
-        val hash = prefs.getString("vault_password_hash", null) ?: return false
-        val checkHash = sha256(pin + salt)
-        return hash == checkHash
+        val saltV2 = prefs.getString("vault_salt_v2", null)
+        val hashV2 = prefs.getString("vault_password_hash_v2", null)
+        if (saltV2 != null && hashV2 != null) {
+            return try {
+                val salt = Base64.getDecoder().decode(saltV2)
+                val expected = Base64.getDecoder().decode(hashV2)
+                MessageDigest.isEqual(expected, derivePasswordHash(pin, salt))
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        val legacySalt = prefs.getString("vault_salt", null) ?: return false
+        val legacyHash = prefs.getString("vault_password_hash", null) ?: return false
+        val valid = MessageDigest.isEqual(
+            legacyHash.toByteArray(Charsets.UTF_8),
+            sha256(pin + legacySalt).toByteArray(Charsets.UTF_8)
+        )
+        if (valid) {
+            val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
+            prefs.edit()
+                .putString("vault_salt_v2", Base64.getEncoder().encodeToString(salt))
+                .putString("vault_password_hash_v2", Base64.getEncoder().encodeToString(derivePasswordHash(pin, salt)))
+                .remove("vault_salt")
+                .remove("vault_password_hash")
+                .apply()
+        }
+        return valid
     }
 
     fun resetVault(context: Context) {
@@ -102,22 +132,14 @@ object VaultService {
         return digest.joinToString("") { "%02x".format(it) }
     }
 
-    private fun deriveKey(password: String, length: Int): ByteArray {
-        val hash = sha256Bytes(password)
-        val key = ByteArray(length)
-        for (i in 0 until length) {
-            val h = hash[i % hash.size].toInt() and 0xFF
-            key[i] = (h xor (i and 0xFF)).toByte()
+    private fun derivePasswordHash(password: String, salt: ByteArray): ByteArray {
+        val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+        val spec = PBEKeySpec(password.toCharArray(), salt, PASSWORD_ITERATIONS, 256)
+        return try {
+            factory.generateSecret(spec).encoded
+        } finally {
+            spec.clearPassword()
         }
-        return key
-    }
-
-    private fun xorBytes(bytes: ByteArray, key: ByteArray): ByteArray {
-        val result = ByteArray(bytes.size)
-        for (i in bytes.indices) {
-            result[i] = (bytes[i].toInt() xor key[i % key.size].toInt()).toByte()
-        }
-        return result
     }
 
     fun lockFile(
@@ -145,41 +167,24 @@ object VaultService {
             File(getVaultDir(context), "vault_$timestamp.nfv").absolutePath
         }
 
-        val fileBytes = file.readBytes()
-        val scrambleLen = minOf(SCRAMBLE_SIZE, fileBytes.size)
-        val scrambleBytes = fileBytes.copyOfRange(0, scrambleLen)
-        val restBytes = fileBytes.copyOfRange(scrambleLen, fileBytes.size)
-
-        val key = deriveKey(password.toString(), scrambleLen)
-        val obfuscatedBytes = xorBytes(scrambleBytes, key)
-
-        // Build metadata payload
-        val metadata = mapOf(
-            "name" to originalName,
-            "path" to originalPath,
-            "size" to size,
-            "timestamp" to timestamp,
-            "isFolder" to isFolder
-        )
-        val metadataStr = Gson().toJson(metadata)
-        val metadataBytes = metadataStr.toByteArray(Charsets.UTF_8)
-
-        val metaKey = deriveKey(password.toString(), metadataBytes.size)
-        val obfuscatedMetadata = xorBytes(metadataBytes, metaKey)
-
         val targetFile = File(scrambledPath)
-        targetFile.outputStream().use { out ->
-            out.write(MAGIC_TAG.toByteArray(Charsets.UTF_8)) // 14 bytes
-            val metaLen = obfuscatedMetadata.size
-            out.write(byteArrayOf(
-                ((metaLen shr 24) and 0xFF).toByte(),
-                ((metaLen shr 16) and 0xFF).toByte(),
-                ((metaLen shr 8) and 0xFF).toByte(),
-                (metaLen and 0xFF).toByte()
-            ))
-            out.write(obfuscatedMetadata)
-            out.write(obfuscatedBytes)
-            out.write(restBytes)
+        val encryptedTemp = File(targetFile.parentFile, ".${targetFile.name}.${timestamp}.tmp")
+        try {
+            VaultCrypto.encryptFile(file, encryptedTemp, password)
+            java.nio.file.Files.move(
+                encryptedTemp.toPath(),
+                targetFile.toPath(),
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING
+            )
+        } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+            java.nio.file.Files.move(
+                encryptedTemp.toPath(),
+                targetFile.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING
+            )
+        } finally {
+            encryptedTemp.delete()
         }
 
         // Delete original file
@@ -213,59 +218,23 @@ object VaultService {
             throw FileNotFoundException("Scrambled vault file not found: ${record.scrambledPath}")
         }
 
-        val bytes = scrambledFile.readBytes()
-        if (bytes.size < MAGIC_TAG.length + 4) {
-            throw Exception("Invalid vault file format (Too short)")
+        if (!VaultCrypto.isV2(scrambledFile)) {
+            VaultCrypto.migrateLegacy(scrambledFile, password)
         }
-
-        val magicBytes = bytes.copyOfRange(0, MAGIC_TAG.length)
-        val magic = String(magicBytes, Charsets.UTF_8)
-        if (magic != MAGIC_TAG) {
-            throw Exception("Invalid vault file format (Magic tag mismatch)")
-        }
-
-        val metaLen = ((bytes[14].toInt() and 0xFF) shl 24) or
-                      ((bytes[15].toInt() and 0xFF) shl 16) or
-                      ((bytes[16].toInt() and 0xFF) shl 8) or
-                      (bytes[17].toInt() and 0xFF)
-
-        val metaStart = MAGIC_TAG.length + 4
-        val metaEnd = metaStart + metaLen
-        if (bytes.size < metaEnd) {
-            throw Exception("Invalid vault file format (Corrupted header)")
-        }
-
-        val obfuscatedMetadata = bytes.copyOfRange(metaStart, metaEnd)
-        val metaKey = deriveKey(password.toString(), obfuscatedMetadata.size)
-        val decryptedMetadataBytes = xorBytes(obfuscatedMetadata, metaKey)
-        val decryptedMetadataStr = String(decryptedMetadataBytes, Charsets.UTF_8)
-        val metadata = Gson().fromJson(decryptedMetadataStr, Map::class.java)
-
-        val fileDataStart = metaEnd
-        val originalSize = (metadata["size"] as Number).toLong()
-        val scrambleLen = minOf(SCRAMBLE_SIZE, originalSize.toInt())
-
-        if (bytes.size < fileDataStart + scrambleLen) {
-            throw Exception("Invalid vault file format (Corrupted payload)")
-        }
-
-        val obfuscatedSignature = bytes.copyOfRange(fileDataStart, fileDataStart + scrambleLen)
-        val restBytes = bytes.copyOfRange(fileDataStart + scrambleLen, bytes.size)
-
-        val key = deriveKey(password.toString(), scrambleLen)
-        val decryptedSignature = xorBytes(obfuscatedSignature, key)
 
         val originalFile = File(record.originalPath)
-        if (record.isFolder) {
-            val zipBytes = decryptedSignature + restBytes
-            val destDir = originalFile.parentFile ?: File("/")
-            unzip(zipBytes, destDir)
-        } else {
-            originalFile.parentFile?.mkdirs()
-            originalFile.outputStream().use { out ->
-                out.write(decryptedSignature)
-                out.write(restBytes)
+        val decryptedTemp = File(context.cacheDir, "vault_unlock_${record.id}.tmp")
+        VaultCrypto.decryptFile(scrambledFile, decryptedTemp, password)
+        try {
+            if (record.isFolder) {
+                val destDir = originalFile.parentFile ?: File("/")
+                unzip(decryptedTemp, destDir)
+            } else {
+                originalFile.parentFile?.mkdirs()
+                decryptedTemp.copyTo(originalFile, overwrite = true)
             }
+        } finally {
+            decryptedTemp.delete()
         }
 
         scrambledFile.delete()
@@ -338,37 +307,12 @@ object VaultService {
             throw FileNotFoundException("Scrambled vault file not found")
         }
 
-        val bytes = scrambledFile.readBytes()
-        val lenBytes = bytes.copyOfRange(MAGIC_TAG.length, MAGIC_TAG.length + 4)
-        val metaLen = ((lenBytes[0].toInt() and 0xFF) shl 24) or
-                      ((lenBytes[1].toInt() and 0xFF) shl 16) or
-                      ((lenBytes[2].toInt() and 0xFF) shl 8) or
-                      (lenBytes[3].toInt() and 0xFF)
-
-        val metaStart = MAGIC_TAG.length + 4
-        val metaEnd = metaStart + metaLen
-        val obfuscatedMetadata = bytes.copyOfRange(metaStart, metaEnd)
-        val metaKey = deriveKey(password.toString(), obfuscatedMetadata.size)
-        val decryptedMetadataBytes = xorBytes(obfuscatedMetadata, metaKey)
-        val decryptedMetadataStr = String(decryptedMetadataBytes, Charsets.UTF_8)
-        val metadata = Gson().fromJson(decryptedMetadataStr, Map::class.java)
-
-        val originalSize = (metadata["size"] as Number).toLong()
-        val scrambleLen = minOf(SCRAMBLE_SIZE, originalSize.toInt())
-
-        val fileDataStart = metaEnd
-        val obfuscatedSignature = bytes.copyOfRange(fileDataStart, fileDataStart + scrambleLen)
-        val restBytes = bytes.copyOfRange(fileDataStart + scrambleLen, bytes.size)
-
-        val key = deriveKey(password.toString(), scrambleLen)
-        val decryptedSignature = xorBytes(obfuscatedSignature, key)
-
+        if (!VaultCrypto.isV2(scrambledFile)) {
+            VaultCrypto.migrateLegacy(scrambledFile, password)
+        }
         val extension = if (record.isFolder) ".zip" else ""
         val tempFilePath = File(context.cacheDir, "temp_vault_${record.id}_${record.originalName}$extension")
-        tempFilePath.outputStream().use { out ->
-            out.write(decryptedSignature)
-            out.write(restBytes)
-        }
+        VaultCrypto.decryptFile(scrambledFile, tempFilePath, password)
         return tempFilePath
     }
 
@@ -398,11 +342,11 @@ object VaultService {
         }
     }
 
-    private fun unzip(zipBytes: ByteArray, destDir: File) {
-        ZipInputStream(ByteArrayInputStream(zipBytes)).use { zis ->
+    private fun unzip(zipFile: File, destDir: File) {
+        ZipInputStream(zipFile.inputStream().buffered()).use { zis ->
             var entry: ZipEntry? = zis.nextEntry
             while (entry != null) {
-                val file = File(destDir, entry.name)
+                val file = PathContainment.resolveUnderRoot(destDir, entry.name)
                 if (entry.isDirectory) {
                     file.mkdirs()
                 } else {

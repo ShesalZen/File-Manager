@@ -68,6 +68,8 @@
 -keep,allowoptimization class com.zenlabs.filemanager.screen.main.tab.files.service.FolderLockEntry { <fields>; }
 -keep,allowoptimization class com.zenlabs.filemanager.screen.main.tab.files.service.VaultFileRecord { <fields>; }
 -keep,allowoptimization class com.zenlabs.filemanager.screen.main.tab.files.service.remote.NetworkConnectionModel { <fields>; }
+-keep,allowoptimization class com.zenlabs.filemanager.screen.main.tab.files.service.remote.NetworkConnectionMetadata { <fields>; }
+-keep,allowoptimization class com.zenlabs.filemanager.screen.main.tab.files.service.remote.NetworkConnectionCredential { <fields>; }
 -keep,allowoptimization class com.zenlabs.filemanager.screen.main.tab.files.task.ScheduledFileTask { <fields>; }
 -keep,allowoptimization class com.zenlabs.filemanager.screen.main.tab.files.ui.BottomBarActionConfig { <fields>; }
 -keep,allowoptimization class com.zenlabs.filemanager.screen.main.tab.home.data.HomeLayout { <fields>; }

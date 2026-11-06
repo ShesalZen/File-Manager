@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import com.zenlabs.filemanager.screen.main.tab.files.holder.LocalFileHolder
 import com.zenlabs.filemanager.screen.main.tab.files.service.remote.*
 import com.zenlabs.filemanager.screen.main.tab.nfile_tools.RemoteExplorerTab
+import com.zenlabs.filemanager.screen.main.tab.nfile_tools.ui.CredentialRecoveryDialog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -32,7 +33,7 @@ import java.io.File
 fun RemoteExplorerScreen(tab: RemoteExplorerTab) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val conn = tab.connection
+    var conn by remember { mutableStateOf(tab.connection) }
 
     var currentPath by remember { mutableStateOf(conn.rootPath.ifEmpty { "/" }) }
     var fileItems by remember { mutableStateOf<List<RemoteFileItem>>(emptyList()) }
@@ -46,10 +47,12 @@ fun RemoteExplorerScreen(tab: RemoteExplorerTab) {
     var showCreateDirDialog by remember { mutableStateOf(false) }
     var showLocalFilePicker by remember { mutableStateOf(false) }
     var newDirName by remember { mutableStateOf("") }
+    var pendingHostKey by remember { mutableStateOf<SftpUnknownHostKeyException?>(null) }
+    var showCredentialRecovery by remember { mutableStateOf(tab.connection.needsCredentialRecovery) }
 
     // Use pooled client for connection reuse & auto-reconnection
-    val client = remember(conn.id) {
-        RemoteConnectionPool.clientFor(conn)
+    val client = remember(conn.id, conn.password) {
+        RemoteConnectionPool.deferredClientFor(conn)
     }
 
     // Connect & Load listing
@@ -58,6 +61,10 @@ fun RemoteExplorerScreen(tab: RemoteExplorerTab) {
         errorMessage = null
         scope.launch {
             try {
+                if (showCredentialRecovery) {
+                    isLoading = false
+                    return@launch
+                }
                 if (!isConnected) {
                     withContext(Dispatchers.IO) {
                         client.connect()
@@ -76,10 +83,64 @@ fun RemoteExplorerScreen(tab: RemoteExplorerTab) {
                 e.printStackTrace()
                 withContext(Dispatchers.Main) {
                     isLoading = false
-                    errorMessage = e.message ?: "Failed to load directory"
+                    val unknownHostKey = e.findSftpUnknownHostKey()
+                    if (unknownHostKey != null) {
+                        pendingHostKey = unknownHostKey
+                        errorMessage = null
+                    } else {
+                        errorMessage = e.findSftpHostKeyMismatch()?.message
+                            ?: e.message
+                            ?: "Failed to load directory"
+                    }
                 }
             }
         }
+    }
+
+    if (showCredentialRecovery) {
+        CredentialRecoveryDialog(
+            connection = conn,
+            onDismissRequest = {
+                showCredentialRecovery = false
+                errorMessage = "Password entry is required before connecting."
+            },
+            onRecovered = { recovered ->
+                showCredentialRecovery = false
+                conn = recovered
+                isConnected = false
+                reloadTrigger++
+            }
+        )
+    }
+
+    pendingHostKey?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { pendingHostKey = null },
+            title = { Text("Trust SSH Host Key?") },
+            text = {
+                Text(
+                    "First connection to ${pending.host}:${pending.port}.\n\n" +
+                        "Algorithm: ${pending.algorithm}\n" +
+                        "Fingerprint: ${pending.fingerprint}\n\n" +
+                        "Verify this fingerprint with your server administrator before trusting it."
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    SftpHostKeyStore(File(context.filesDir, "sftp_known_hosts")).trust(pending)
+                    pendingHostKey = null
+                    isConnected = false
+                    reloadTrigger++
+                }) {
+                    Text("Trust and Continue")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingHostKey = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     Scaffold(

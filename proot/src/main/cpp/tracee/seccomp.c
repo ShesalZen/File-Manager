@@ -157,9 +157,12 @@ static int handle_seccomp_event_common(Tracee *tracee)
 		 * policy that rejects the newer syscall (this is what raised
 		 * the SIGSYS that brought us here), and so PRoot translates
 		 * the path when the syscall is restarted.  The how.resolve
-		 * flags (RESOLVE_BENEATH, ...) are dropped: they are not
-		 * compatible with PRoot rewriting paths to absolute host
-		 * paths, and PRoot already confines resolution to the rootfs.  */
+		 * flags (RESOLVE_BENEATH, ...) are intentionally dropped:
+		 * they constrain resolution relative to the caller's guest
+		 * directory descriptor, but PRoot must resolve an absolute
+		 * host path in the host namespace.  PRoot's guest-root path
+		 * translation and binding checks provide containment instead;
+		 * see docs/native-sanitizer-ci.md for the full contract.  */
 		struct proot_open_how how = {};
 		word_t how_size = peek_reg(tracee, CURRENT, SYSARG_4);
 		if (how_size > sizeof(how))

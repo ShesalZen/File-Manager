@@ -105,6 +105,8 @@ import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 
+private const val MAX_BITMAP_HISTORY = 3
+
 enum class EditorTab {
     CROP_ROTATE, FILTERS, ADJUST, DRAW
 }
@@ -132,15 +134,24 @@ fun ImageEditorScreen(
     val undoStack = remember { mutableStateListOf<Bitmap>() }
     val redoStack = remember { mutableStateListOf<Bitmap>() }
 
+    fun trimHistory() {
+        while (undoStack.size + redoStack.size > MAX_BITMAP_HISTORY) {
+            val removed = if (undoStack.isNotEmpty()) undoStack.removeAt(0) else redoStack.removeAt(0)
+            if (!removed.isRecycled) removed.recycle()
+        }
+    }
     fun commitState(newBitmap: Bitmap) {
         undoStack.add(currentBitmap.copy(currentBitmap.config ?: Bitmap.Config.ARGB_8888, true))
+        redoStack.forEach { if (!it.isRecycled) it.recycle() }
         redoStack.clear()
+        trimHistory()
         currentBitmap = newBitmap
     }
     fun undo() {
         if (undoStack.isNotEmpty()) {
             val last = undoStack.removeAt(undoStack.lastIndex)
             redoStack.add(currentBitmap.copy(currentBitmap.config ?: Bitmap.Config.ARGB_8888, true))
+            trimHistory()
             currentBitmap = last
         }
     }
@@ -148,6 +159,7 @@ fun ImageEditorScreen(
         if (redoStack.isNotEmpty()) {
             val next = redoStack.removeAt(redoStack.lastIndex)
             undoStack.add(currentBitmap.copy(currentBitmap.config ?: Bitmap.Config.ARGB_8888, true))
+            trimHistory()
             currentBitmap = next
         }
     }

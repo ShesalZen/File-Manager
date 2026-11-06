@@ -1305,6 +1305,15 @@
     // Dynamic modal state
     let currentModalUrl = '';
 
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, '\u0026amp;')
+        .replace(/</g, '\u0026lt;')
+        .replace(/>/g, '\u0026gt;')
+        .replace(/"/g, '\u0026quot;')
+        .replace(/'/g, '\u0026#x27;');
+    }
+
     function handleItemClick(el) {
       const type = el.getAttribute('data-type');
       const url = el.getAttribute('data-url');
@@ -1359,7 +1368,7 @@
       } else if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
         body.innerHTML = `
           <div class="image-container">
-            <img src="${url}" class="preview-image" alt="${name}">
+            <img src="${url}" class="preview-image" alt="${escapeHtml(name)}">
           </div>
         `;
       } else if (ext === 'pdf') {
@@ -1416,6 +1425,14 @@
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
+    }
+
+    function downloadFileFromElement(element, event) {
+      downloadFile(
+        element.getAttribute('data-url'),
+        element.getAttribute('data-name'),
+        event
+      );
     }
 
     function copyFileLink(url, event) {

@@ -58,6 +58,5 @@ try {
         Save-Icon $round (Join-Path $dir 'ic_launcher_round.png') $d.Value
     }
     Save-Icon $square (Join-Path $ProjectRoot 'assets\app_icon.png') 800
-    Save-Icon $square (Join-Path $ProjectRoot 'fastlane\metadata\android\en-US\images\icon.png') 512
 } finally { $square.Dispose(); $round.Dispose() }
 Write-Host 'Generated ZenLabs launcher icons.'

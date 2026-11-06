@@ -2,30 +2,43 @@ package com.zenlabs.filemanager.screen.main.tab.files.service
 
 import android.content.Context
 import android.net.Uri
+import com.zenlabs.filemanager.common.PathContainment
 import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.connection.channel.forwarded.RemotePortForwarder
 import net.schmizz.sshj.connection.channel.forwarded.SocketForwardingConnectListener
 import java.io.*
 import java.net.*
+import java.security.MessageDigest
+import java.security.SecureRandom
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.Semaphore
 import java.util.regex.Pattern
 import kotlin.concurrent.thread
 
 object WebSharingServer {
     private const val PORT = 8080
+    private const val MAX_HEADER_BYTES = 8 * 1024
+    private const val MAX_UPLOAD_BYTES = 2L * 1024L * 1024L * 1024L
+    private const val MAX_CONCURRENT_CLIENTS = 16
+    private const val SOCKET_TIMEOUT_MS = 30_000
+    private const val TOKEN_COOKIE = "session"
 
     private var serverSocket: ServerSocket? = null
     private var isLocalActive = false
     private var isInternetActive = false
     private var localIpAddress = "127.0.0.1"
     private var internetShareLink = ""
+    private var internetErrorMessage = ""
     private var sshClient: SSHClient? = null
     private var rootDir = ""
+    private var sessionToken = ""
+    private val clientSlots = Semaphore(MAX_CONCURRENT_CLIENTS)
 
     fun start(context: Context, rootPath: String, onStatusChanged: () -> Unit) {
         if (isLocalActive) return
         this.rootDir = rootPath
+        this.sessionToken = generateToken()
         localIpAddress = getLocalIpAddress()
         isLocalActive = true
 
@@ -34,8 +47,19 @@ object WebSharingServer {
                 serverSocket = ServerSocket(PORT)
                 while (isLocalActive) {
                     val socket = serverSocket?.accept() ?: break
+                    if (!clientSlots.tryAcquire()) {
+                        try {
+                            socket.getOutputStream().write("503 Too many clients.\r\n".toByteArray(Charsets.UTF_8))
+                            socket.close()
+                        } catch (_: Exception) {}
+                        continue
+                    }
                     thread {
-                        handleClient(context, socket)
+                        try {
+                            handleClient(context, socket)
+                        } finally {
+                            clientSlots.release()
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -55,6 +79,7 @@ object WebSharingServer {
             serverSocket?.close()
         } catch (_: Exception) {}
         serverSocket = null
+        sessionToken = ""
         onStatusChanged()
     }
 
@@ -64,15 +89,17 @@ object WebSharingServer {
             start(context, rootPath, onStatusChanged)
         }
         isInternetActive = true
+        internetErrorMessage = ""
         internetShareLink = "Establishing secure proxy tunnel..."
         onStatusChanged()
 
         thread {
+            val pinnedVerifier = WebShareTunnelKeys.createPinnedVerifier()
             try {
                 com.zenlabs.filemanager.screen.main.tab.files.service.remote.SftpRemoteClient.ensureBouncyCastle()
 
                 sshClient = SSHClient()
-                sshClient!!.addHostKeyVerifier(WebShareTunnelKeys.createTofuVerifier(context))
+                sshClient!!.addHostKeyVerifier(pinnedVerifier)
                 sshClient!!.connect("localhost.run", 22)
                 val keys = WebShareTunnelKeys.loadKeys(sshClient!!, context)
                 sshClient!!.auth(
@@ -103,6 +130,13 @@ object WebSharingServer {
             } catch (e: Exception) {
                 e.printStackTrace()
                 stopInternetTunnel()
+                internetErrorMessage = if (pinnedVerifier.mismatchDetected) {
+                    WebShareTunnelHostKeyMismatchException().message
+                        ?: "The public tunnel service rotated its security keys. Please update the application to restore public tunnel sharing."
+                } else {
+                    findTunnelHostKeyMismatch(e)?.message
+                        ?: "Unable to establish the secure public tunnel. Please try again."
+                }
                 onStatusChanged()
             }
         }
@@ -120,8 +154,31 @@ object WebSharingServer {
 
     fun isLocalActive(): Boolean = isLocalActive
     fun isInternetActive(): Boolean = isInternetActive
-    fun getLocalUrl(): String = "http://$localIpAddress:$PORT"
-    fun getInternetUrl(): String = internetShareLink
+    fun getLocalUrl(): String = withToken("http://$localIpAddress:$PORT/")
+    fun getInternetUrl(): String = withToken(internetShareLink)
+    fun getInternetErrorMessage(): String = internetErrorMessage
+
+    private fun findTunnelHostKeyMismatch(error: Throwable): WebShareTunnelHostKeyMismatchException? {
+        var current: Throwable? = error
+        val visited = mutableSetOf<Throwable>()
+        while (current != null && visited.add(current)) {
+            if (current is WebShareTunnelHostKeyMismatchException) return current
+            current = current.cause
+        }
+        return null
+    }
+
+    private fun withToken(url: String): String {
+        if (!url.startsWith("http") || sessionToken.isEmpty()) return url
+        val separator = if (url.contains('?')) '&' else '?'
+        return "$url${separator}token=$sessionToken"
+    }
+
+    private fun generateToken(): String {
+        val bytes = ByteArray(16)
+        SecureRandom().nextBytes(bytes)
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
 
     private fun getLocalIpAddress(): String {
         try {
@@ -147,6 +204,7 @@ object WebSharingServer {
         val output = socket.getOutputStream()
 
         try {
+            socket.soTimeout = SOCKET_TIMEOUT_MS
             // Read the entire header block byte-by-byte until we hit \r\n\r\n
             // This avoids BufferedReader pre-consuming POST body bytes
             val headerBytes = readHttpHeaders(input) ?: return
@@ -158,7 +216,13 @@ object WebSharingServer {
             val parts = requestLine.split(" ")
             if (parts.size < 3) return
             val method = parts[0]
-            val path = Uri.decode(parts[1])
+            if (method != "GET" && method != "POST") {
+                sendErrorResponse(output, 405, "Method Not Allowed")
+                return
+            }
+            val requestUri = Uri.parse(parts[1])
+            val path = requestUri.path ?: "/"
+            val queryToken = requestUri.getQueryParameter("token")
 
             // Parse headers
             val headers = mutableMapOf<String, String>()
@@ -170,45 +234,77 @@ object WebSharingServer {
                 }
             }
 
-            // Security check for directory traversal
-            if (path.contains("..")) {
-                sendErrorResponse(output, 403, "Forbidden")
+            val authorized = isAuthorized(headers, queryToken)
+            if (!authorized) {
+                sendErrorResponse(output, 401, "Unauthorized")
+                return
+            }
+            if (queryToken != null && constantTimeEquals(queryToken, sessionToken)) {
+                sendRedirectWithTokenCookie(output, path)
                 return
             }
 
-            val targetFile = File(rootDir, if (path == "/") "" else path.substring(1))
+            val targetFile = try {
+                PathContainment.resolveUnderRoot(File(rootDir), path.removePrefix("/"))
+            } catch (_: SecurityException) {
+                sendErrorResponse(output, 403, "Forbidden")
+                return
+            }
 
             if (method == "POST") {
                 val fileNameHeader = headers["x-file-name"]
                 if (fileNameHeader != null) {
                     val decodedFileName = Uri.decode(fileNameHeader)
-                    val uploadDestination = if (targetFile.isDirectory) {
-                        File(targetFile, decodedFileName)
-                    } else {
-                        File(targetFile.parentFile, decodedFileName)
+                    val safeFileName = decodedFileName.substringAfterLast('/').substringAfterLast('\\')
+                    if (safeFileName.isBlank() || safeFileName == "." || safeFileName == "..") {
+                        sendErrorResponse(output, 400, "Bad Request")
+                        return
                     }
-
-                    // Check path safety
-                    if (!uploadDestination.canonicalPath.startsWith(File(rootDir).canonicalPath)) {
+                    val targetDirectory = if (targetFile.isDirectory) targetFile else targetFile.parentFile
+                        ?: return sendErrorResponse(output, 400, "Bad Request")
+                    val uploadDestination = try {
+                        PathContainment.resolveUnderRoot(targetDirectory, safeFileName)
+                    } catch (_: SecurityException) {
                         sendErrorResponse(output, 403, "Forbidden")
                         return
                     }
 
-                    val contentLength = headers["content-length"]?.toLongOrNull() ?: 0L
-                    // Read body directly from raw InputStream — no BufferedReader interference
-                    uploadDestination.outputStream().use { fos ->
-                        val buffer = ByteArray(8192)
-                        var totalRead = 0L
-                        while (totalRead < contentLength) {
-                            val toRead = minOf(buffer.size.toLong(), contentLength - totalRead).toInt()
-                            val read = input.read(buffer, 0, toRead)
-                            if (read == -1) break
-                            fos.write(buffer, 0, read)
-                            totalRead += read
-                        }
+                    val contentLength = headers["content-length"]?.toLongOrNull()
+                    if (contentLength == null || contentLength < 0L || contentLength > MAX_UPLOAD_BYTES) {
+                        sendErrorResponse(output, 413, "Payload Too Large")
+                        return
+                    }
+                    val availableBytes = uploadDestination.parentFile?.usableSpace ?: 0L
+                    if (contentLength > 0L && availableBytes < contentLength) {
+                        sendErrorResponse(output, 507, "Insufficient Storage")
+                        return
                     }
 
-                    sendStringResponse(output, 200, "OK", "Upload successful", "text/plain")
+                    val partFile = File(uploadDestination.parentFile, ".${uploadDestination.name}.${UUID.randomUUID()}.part")
+                    var completed = false
+                    try {
+                        partFile.outputStream().use { fos ->
+                            val buffer = ByteArray(64 * 1024)
+                            var totalRead = 0L
+                            while (totalRead < contentLength) {
+                                val toRead = minOf(buffer.size.toLong(), contentLength - totalRead).toInt()
+                                val read = input.read(buffer, 0, toRead)
+                                if (read == -1) break
+                                fos.write(buffer, 0, read)
+                                totalRead += read
+                            }
+                            if (totalRead != contentLength) {
+                                throw IOException("Incomplete upload body")
+                            }
+                        }
+                        if (!moveAtomically(partFile, uploadDestination)) {
+                            throw IOException("Unable to finalize upload")
+                        }
+                        completed = true
+                        sendStringResponse(output, 200, "OK", "Upload successful", "text/plain")
+                    } finally {
+                        if (!completed) partFile.delete()
+                    }
                 } else {
                     sendErrorResponse(output, 400, "Bad Request")
                 }
@@ -226,10 +322,12 @@ object WebSharingServer {
             } else {
                 serveFileStreaming(output, headers, targetFile)
             }
+        } catch (e: HeaderTooLargeException) {
+            try { sendErrorResponse(output, 431, "Request Header Fields Too Large") } catch (_: Exception) {}
         } catch (e: Exception) {
             e.printStackTrace()
             try {
-                sendErrorResponse(output, 500, "Internal Server Error: ${e.message}")
+                sendErrorResponse(output, 500, "Internal Server Error")
             } catch (_: Exception) {}
         } finally {
             try { socket.close() } catch (_: Exception) {}
@@ -250,6 +348,7 @@ object WebSharingServer {
         while (true) {
             val b = input.read()
             if (b == -1) return if (buffer.size() > 0) buffer.toByteArray() else null
+            if (buffer.size() >= MAX_HEADER_BYTES) throw HeaderTooLargeException()
             buffer.write(b)
             // Detect \r\n\r\n
             if (prev3 == '\r'.code && prev2 == '\n'.code && prev1 == '\r'.code && b == '\n'.code) {
@@ -260,6 +359,67 @@ object WebSharingServer {
             prev3 = prev2; prev2 = prev1; prev1 = b
         }
     }
+
+    internal fun isAuthorized(
+        headers: Map<String, String>,
+        queryToken: String?,
+        expectedToken: String = sessionToken
+    ): Boolean {
+        if (expectedToken.isEmpty()) return false
+        val authorization = headers["authorization"]
+        if (authorization != null && authorization.startsWith("Bearer ", ignoreCase = true)) {
+            if (constantTimeEquals(authorization.substring(7).trim(), expectedToken)) return true
+        }
+        if (queryToken != null && constantTimeEquals(queryToken, expectedToken)) return true
+        val cookie = headers["cookie"]?.split(';')?.map { it.trim() }?.firstOrNull { it.startsWith("$TOKEN_COOKIE=") }
+        val cookieToken = cookie?.substringAfter("$TOKEN_COOKIE=")
+        return cookieToken != null && constantTimeEquals(cookieToken, expectedToken)
+    }
+
+    private fun constantTimeEquals(actual: String, expected: String): Boolean {
+        return MessageDigest.isEqual(
+            actual.toByteArray(Charsets.UTF_8),
+            expected.toByteArray(Charsets.UTF_8)
+        )
+    }
+
+    private fun sendRedirectWithTokenCookie(output: OutputStream, path: String) {
+        val location = encodePath(if (path.startsWith("/")) path else "/$path")
+        val pw = PrintWriter(output)
+        pw.print("HTTP/1.1 302 Found\r\n")
+        pw.print("Location: $location\r\n")
+        pw.print("Set-Cookie: $TOKEN_COOKIE=$sessionToken; Path=/; HttpOnly; SameSite=Strict\r\n")
+        pw.print("Referrer-Policy: no-referrer\r\n")
+        pw.print("Content-Length: 0\r\n")
+        pw.print("Cache-Control: no-store\r\n")
+        pw.print("\r\n")
+        pw.flush()
+    }
+
+    private fun moveAtomically(source: File, destination: File): Boolean {
+        return try {
+            java.nio.file.Files.move(
+                source.toPath(),
+                destination.toPath(),
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING
+            )
+            true
+        } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+            try {
+                java.nio.file.Files.move(
+                    source.toPath(),
+                    destination.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                )
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
+
+    private class HeaderTooLargeException : Exception()
 
     private fun serveDirectoryListing(context: Context, output: OutputStream, currentPath: String, directory: File) {
         val files = directory.listFiles() ?: emptyArray()
@@ -287,15 +447,15 @@ object WebSharingServer {
         var breadcrumbsHtml = """<a href="/">Root</a>"""
         var pathAccumulator = ""
         for (part in parts) {
-            pathAccumulator += "/$part"
-            breadcrumbsHtml += """ <span class="arrow">&gt;</span> <a href="$pathAccumulator">$part</a>"""
+            pathAccumulator += "/${Uri.encode(part)}"
+            breadcrumbsHtml += """ <span class="arrow">></span> <a href="${escapeHtml(pathAccumulator)}">${escapeHtml(part)}</a>"""
         }
 
         var listHtml = ""
         if (currentPath != "/") {
             val parentPath = if (currentPath.substringBeforeLast("/").isEmpty()) "/" else currentPath.substringBeforeLast("/")
             listHtml += """
-                <div class="explorer-item parent-dir" onclick="window.location.href='$parentPath'">
+                <div class="explorer-item parent-dir" data-type="directory" data-url="${escapeHtml(encodePath(parentPath))}" onclick="handleItemClick(this)">
                   <div class="item-icon-wrapper dir-icon">$backSvg</div>
                   <div class="item-details">
                     <div class="item-name">.. (Parent Directory)</div>
@@ -312,7 +472,9 @@ object WebSharingServer {
             if (name.startsWith(".")) continue
 
             val isDir = file.isDirectory
-            val relativeUrl = if (currentPath == "/") "/$name" else "$currentPath/$name"
+            val relativeUrl = if (currentPath == "/") "/${Uri.encode(name)}" else "${encodePath(currentPath)}/${Uri.encode(name)}"
+            val escapedName = escapeHtml(name)
+            val escapedUrl = escapeHtml(relativeUrl)
 
             var sizeStr = "-"
             var dateStr = "-"
@@ -364,19 +526,19 @@ object WebSharingServer {
 
             if (isDir) {
                 listHtml += """
-                    <div class="explorer-item folder-item" data-name="${name.replace("\"", "&quot;")}" data-type="directory" data-url="$relativeUrl" onclick="handleItemClick(this)">
+                    <div class="explorer-item folder-item" data-name="$escapedName" data-type="directory" data-url="$escapedUrl" onclick="handleItemClick(this)">
                       <div class="item-icon-wrapper dir-icon">$svgIcon</div>
                       <div class="item-details">
-                        <div class="item-name" title="${name.replace("\"", "&quot;")}">$name</div>
+                        <div class="item-name" title="$escapedName">$escapedName</div>
                       </div>
                     </div>
                 """.trimIndent()
             } else {
                 listHtml += """
-                    <div class="explorer-item file-item" data-name="${name.replace("\"", "&quot;")}" data-type="file" data-url="$relativeUrl" data-size="$sizeStr" data-modified="$dateStr" data-mime="$mimeType" onclick="handleItemClick(this)">
+                    <div class="explorer-item file-item" data-name="$escapedName" data-type="file" data-url="$escapedUrl" data-size="$sizeStr" data-modified="$dateStr" data-mime="$mimeType" onclick="handleItemClick(this)">
                       <div class="item-icon-wrapper $iconClass">$svgIcon</div>
                       <div class="item-details">
-                        <div class="item-name" title="${name.replace("\"", "&quot;")}">$name</div>
+                        <div class="item-name" title="$escapedName">$escapedName</div>
                         <div class="item-meta">
                           <span class="item-size">$sizeStr</span>
                           <span class="item-sep">•</span>
@@ -384,7 +546,7 @@ object WebSharingServer {
                         </div>
                       </div>
                       <div class="item-actions">
-                        <button class="action-btn download-btn" onclick="downloadFile('$relativeUrl', '${name.replace("'", "\\'")}', event)" title="Download File">
+                          <button class="action-btn download-btn" data-url="$escapedUrl" data-name="$escapedName" onclick="downloadFileFromElement(this, event)" title="Download File">
                           $downloadSvg
                         </button>
                       </div>
@@ -406,7 +568,7 @@ object WebSharingServer {
         // Read template from assets
         val template = context.assets.open("web_share_portal.html").bufferedReader().use { it.readText() }
         val outputHtml = template
-            .replace("${'$'}title", title)
+            .replace("${'$'}title", escapeHtml(title))
             .replace("${'$'}badgeHtml", badgeHtml)
             .replace("${'$'}breadcrumbsHtml", breadcrumbsHtml)
             .replace("${'$'}listHtml", listHtml)
@@ -455,7 +617,9 @@ object WebSharingServer {
             pw.print("Content-Type: $contentType\r\n")
             pw.print("Content-Length: $contentLength\r\n")
             pw.print("Content-Range: bytes $start-$end/$fileSize\r\n")
-            pw.print("Content-Disposition: attachment; filename=\"$encodedFilename\"; filename*=UTF-8''$encodedFilename\r\n\r\n")
+            pw.print("Content-Disposition: attachment; filename=\"$encodedFilename\"; filename*=UTF-8''$encodedFilename\r\n")
+            pw.print("Cache-Control: no-store\r\n")
+            pw.print("X-Content-Type-Options: nosniff\r\n\r\n")
             pw.flush()
 
             file.inputStream().use { input ->
@@ -476,7 +640,9 @@ object WebSharingServer {
             pw.print("Accept-Ranges: bytes\r\n")
             pw.print("Content-Type: $contentType\r\n")
             pw.print("Content-Length: $fileSize\r\n")
-            pw.print("Content-Disposition: attachment; filename=\"$encodedFilename\"; filename*=UTF-8''$encodedFilename\r\n\r\n")
+            pw.print("Content-Disposition: attachment; filename=\"$encodedFilename\"; filename*=UTF-8''$encodedFilename\r\n")
+            pw.print("Cache-Control: no-store\r\n")
+            pw.print("X-Content-Type-Options: nosniff\r\n\r\n")
             pw.flush()
 
             file.inputStream().use { input ->
@@ -486,12 +652,28 @@ object WebSharingServer {
         }
     }
 
+    internal fun escapeHtml(value: String): String = value
+        .replace("&", "\u0026amp;")
+        .replace("<", "\u0026lt;")
+        .replace(">", "\u0026gt;")
+        .replace("\"", "\u0026quot;")
+        .replace("'", "\u0026#x27;")
+
+    private fun encodePath(path: String): String {
+        return "/" + path.split("/").filter { it.isNotEmpty() }.joinToString("/") { Uri.encode(it) }
+    }
+
     private fun sendStringResponse(output: OutputStream, code: Int, status: String, data: String, contentType: String) {
         val bytes = data.toByteArray(Charsets.UTF_8)
         val pw = PrintWriter(output)
         pw.print("HTTP/1.1 $code $status\r\n")
         pw.print("Content-Type: $contentType\r\n")
-        pw.print("Content-Length: ${bytes.size}\r\n\r\n")
+        pw.print("Content-Length: ${bytes.size}\r\n")
+        pw.print("Cache-Control: no-store\r\n")
+        pw.print("X-Content-Type-Options: nosniff\r\n")
+        pw.print("Referrer-Policy: no-referrer\r\n")
+        pw.print("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'\r\n")
+        pw.print("\r\n")
         pw.flush()
         output.write(bytes)
         output.flush()

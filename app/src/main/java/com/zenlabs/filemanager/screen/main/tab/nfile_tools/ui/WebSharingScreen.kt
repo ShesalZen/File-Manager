@@ -40,6 +40,7 @@ fun WebSharingTabContentView(tab: WebSharingTab) {
     var isInternetRunning by remember { mutableStateOf(WebSharingServer.isInternetActive()) }
     var localUrl by remember { mutableStateOf(WebSharingServer.getLocalUrl()) }
     var internetUrl by remember { mutableStateOf(WebSharingServer.getInternetUrl()) }
+    var internetError by remember { mutableStateOf(WebSharingServer.getInternetErrorMessage()) }
     var sharedPath by remember { mutableStateOf(Environment.getExternalStorageDirectory().absolutePath) }
 
     var showFolderPicker by remember { mutableStateOf(false) }
@@ -105,11 +106,28 @@ fun WebSharingTabContentView(tab: WebSharingTab) {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = if (isInternetRunning) internetUrl else "Tunnel proxy is closed",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = when {
+                                internetError.isNotEmpty() -> internetError
+                                isInternetRunning -> internetUrl
+                                else -> "Tunnel proxy is closed"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (internetError.isNotEmpty()) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
+                        if (internetError.isNotEmpty()) {
+                            Text(
+                                "The tunnel was stopped to protect your shared files.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
                     if (isInternetRunning && internetUrl.startsWith("https://")) {
                         IconButton(onClick = {
                             clipboardManager.setText(AnnotatedString(internetUrl))
@@ -267,6 +285,7 @@ fun WebSharingTabContentView(tab: WebSharingTab) {
                             isInternetRunning = WebSharingServer.isInternetActive()
                             localUrl = WebSharingServer.getLocalUrl()
                             internetUrl = WebSharingServer.getInternetUrl()
+                            internetError = WebSharingServer.getInternetErrorMessage()
 
                             if (internetUrl.startsWith("https://")) {
                                 val serviceIntent = Intent(context, WebSharingForegroundService::class.java).apply {

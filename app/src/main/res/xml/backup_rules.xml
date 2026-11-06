@@ -6,8 +6,11 @@
    See https://developer.android.com/about/versions/12/backup-restore
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <exclude domain="sharedpref" path="network_connections_prefs.xml"/>
+    <exclude domain="sharedpref" path="network_connections_credentials.xml"/>
+    <exclude domain="sharedpref" path="vault_prefs.xml"/>
+    <exclude domain="file" path="sftp_known_hosts"/>
+    <exclude domain="file" path="vault/"/>
+    <exclude domain="file" path="webshare/id_rsa.pem"/>
+    <exclude domain="file" path="webshare/localhost.run.pub"/>
 </full-backup-content>
