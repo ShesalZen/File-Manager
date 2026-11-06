@@ -10,10 +10,10 @@
 
 [![Platform](https://img.shields.io/badge/Platform-Android-brightgreen.svg?logo=android)](https://www.android.com/)
 [![License](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Release](https://img.shields.io/github/v/release/techflyers/ZenLabs-File-Explorer?label=Release)](https://github.com/techflyers/ZenLabs-File-Explorer/releases)
-[![APK Downloads](https://img.shields.io/github/downloads/techflyers/ZenLabs-File-Explorer/total.svg?label=APK%20Downloads)](https://github.com/techflyers/ZenLabs-File-Explorer/releases)
-[![Stars](https://img.shields.io/github/stars/techflyers/ZenLabs-File-Explorer?style=flat&logo=github)](https://github.com/techflyers/ZenLabs-File-Explorer/stargazers)
-[![Forks](https://img.shields.io/github/forks/techflyers/ZenLabs-File-Explorer?style=flat&logo=github)](https://github.com/techflyers/ZenLabs-File-Explorer/network/members)
+[![Release](https://img.shields.io/github/v/release/ShesalZen/File-Manager?label=Release)](https://github.com/ShesalZen/File-Manager/releases)
+[![APK Downloads](https://img.shields.io/github/downloads/ShesalZen/File-Manager/total.svg?label=APK%20Downloads)](https://github.com/ShesalZen/File-Manager/releases)
+[![Stars](https://img.shields.io/github/stars/ShesalZen/File-Manager?style=flat&logo=github)](https://github.com/ShesalZen/File-Manager/stargazers)
+[![Forks](https://img.shields.io/github/forks/ShesalZen/File-Manager?style=flat&logo=github)](https://github.com/ShesalZen/File-Manager/network/members)
 
 **A modern, feature-rich, and lightweight file manager for Android, built entirely with Kotlin and Jetpack Compose.**
 
@@ -140,8 +140,8 @@
 1. **Clone the repository**:
 
    ```bash
-   git clone https://github.com/techflyers/ZenLabs-File-Explorer.git
-   cd ZenLabs-File-Explorer
+   git clone https://github.com/ShesalZen/File-Manager.git
+   cd File-Manager
    ```
 
 2. **Build the application**:
@@ -265,10 +265,10 @@ See the [LICENSE](LICENSE) file for the full license text.
 
 | Platform                                                                      | Purpose                       |
 |-------------------------------------------------------------------------------|-------------------------------|
-| [**GitHub Issues**](https://github.com/techflyers/ZenLabs-File-Explorer/issues) | Bug reports, feature requests |
-| [**GitHub Discussions**](https://github.com/techflyers/ZenLabs-File-Explorer/discussions) | Community support, questions  |
+| [**GitHub Issues**](https://github.com/ShesalZen/File-Manager/issues) | Bug reports, feature requests |
+| [**GitHub Discussions**](https://github.com/ShesalZen/File-Manager/discussions) | Community support, questions  |
 | [**Email**](mailto:techflyermail@gmail.com)                                   | Private inquiries             |
 
 **⭐ If you find this project useful, please consider giving it a star !**
 
-[![Star History](https://img.shields.io/github/stars/techflyers/ZenLabs-File-Explorer?style=social)](https://github.com/techflyers/ZenLabs-File-Explorer/stargazers)
+[![Star History](https://img.shields.io/github/stars/ShesalZen/File-Manager?style=social)](https://github.com/ShesalZen/File-Manager/stargazers)

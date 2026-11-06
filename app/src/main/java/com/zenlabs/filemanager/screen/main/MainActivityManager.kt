@@ -847,7 +847,7 @@ class MainActivityManager {
         onResult: (List<GithubRelease>) -> Unit
     ) {
         CoroutineScope(Dispatchers.IO).launch {
-            val url = "https://api.github.com/repos/techflyers/ZenLabs-File-Explorer/releases"
+            val url = "https://api.github.com/repos/ShesalZen/File-Manager/releases"
             var releases = emptyList<GithubRelease>()
 
             try {

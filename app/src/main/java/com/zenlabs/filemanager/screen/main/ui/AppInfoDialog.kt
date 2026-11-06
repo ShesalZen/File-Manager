@@ -287,7 +287,7 @@ fun AppInfoDialog(
                                             context.startActivity(
                                                 Intent(
                                                     Intent.ACTION_VIEW,
-                                                    "https://github.com/techflyers/ZenLabs-File-Explorer".toUri()
+                                                    "https://github.com/ShesalZen/File-Manager".toUri()
                                                 )
                                             )
                                         }
