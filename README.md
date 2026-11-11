@@ -35,12 +35,12 @@
 *   **Recycle Bin Restore**: Preserves the original file paths by writing a `metadata.json` sidecar, allowing you to restore deleted files to their exact source.
 *   **Privileged Explorer Mode**: Complete root and **Shizuku** integration to display file sizes, timestamps, and contents count for restricted folders.
 
-### 🔒 **Private Wallet (Vault)**
+### **Private Wallet (Vault)**
 *   **Secure PIN Protection**: Set up a custom 4-digit PIN with a haptic-feedback keypad to lock your sensitive files.
 *   **Cryptographic Scrambling**: Encrypts and decrypts files using **SHA-256 password salting** and custom **byte XOR-scrambling**.
 *   **Seamless Temporary Viewing**: Decrypts files temporarily to the cache for inline viewer viewing and automatically scrubs them on exit.
 
-### 🌐 **Local Server**
+### **Local Server**
 *   **Local FTP Server**: Run a background FTP server via a persistent `FtpForegroundService` with notification-area status controls.
 *   **Web Sharing Portal**: Host an offline directory listing server, support chunked/range media streaming for browser viewing, accept remote POST file uploads, and establish secure public tunnels via SSH client port-forwarding to `localhost.run`.
 
@@ -50,7 +50,7 @@
 *   **Encrypted Archive Listing**: Decoupled from the UI thread using `zip4j`, allowing users to enter passwords to list or browse encrypted entries cleanly.
 *   **Logical Nesting Fix**: Browse nested sub-archives without exposing temporary folder paths in breadcrumbs.
 
-### 📺 **Premium Built-in Viewers & Editors**
+### **Premium Built-in Viewers & Editors**
 *   **Jetpack PDF Viewer**: Rewritten from legacy PDFBox loading to Jetpack's native `androidx.pdf:pdf-viewer-fragment` (reducing load times from 6.4s to under 1.5s). Features native text selection, copy-paste, find-in-document search, coordinate-aligned highlights, high-resolution rendering on zoom, page indicator bubble, and a Go-to-Page dialog.
 *   **Native Excel Spreadsheet Viewer**: Renders `.xls` and `.xlsx` sheets in a custom Compose-based scrollable grid with coordinate headers (A, B, C... / 1, 2, 3...) and cell borders. Includes filter/sorting controls and tab-based sheet navigation.
 *   **Embedded Office Layout Engine (Docreader)**: High-fidelity layout rendering of Word (`.doc`, `.docx`) and PowerPoint (`.ppt`, `.pptx`) files, powered by the core engine from [`all-documents-reader`](https://github.com/ahmadullahpk/all-documents-reader).
@@ -79,7 +79,7 @@
 
 ---
 
-## 🛠️ Built With
+## Built With
 
 | Technology | Purpose | Version |
 | :--- | :--- | :--- |
@@ -196,15 +196,7 @@ File Manager by ZenLabs is distributed directly via GitHub Releases (sideloaded 
 
 ---
 
-## 🤝 Contributing
-
-1. **Fork** the repository
-2. **Create** a feature branch (`git checkout -b feature/amazing-feature`)
-3. **Commit** your changes (`git commit -m 'Add amazing feature'`)
-4. **Push** to the branch (`git push origin feature/amazing-feature`)
-5. **Open** a Pull Request
-
-### 📝 **Development Guidelines**
+### **Development Guidelines**
 
 - Follow Kotlin coding conventions.
 - Keep credentials, signing material, generated profiles, APKs, and local SDK configuration out of Git.
@@ -213,24 +205,6 @@ File Manager by ZenLabs is distributed directly via GitHub Releases (sideloaded 
 - Document behavior that still requires a physical device; do not report untested runtime behavior as verified.
 
 For security-sensitive changes, use [`docs/security-hardening-smoke-test.md`](docs/security-hardening-smoke-test.md) and [`docs/PHYSICAL_DEVICE_SMOKE_TEST.md`](docs/PHYSICAL_DEVICE_SMOKE_TEST.md).
-
----
-
-## 📄 License
-
-This project is licensed under the **GNU General Public License v3.0**.
-
-```
-File Manager by ZenLabs - A modern Android file manager
-Copyright (C) 2024 techflyers (upstream Prism File Explorer + contributors)
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-```
-
-See the [LICENSE](LICENSE) file for the full license text.
 
 ---
 
