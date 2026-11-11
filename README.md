@@ -1,4 +1,3 @@
-> [!NOTE]
 > **This repository is a feature-rich fork (including a Private Wallet, Local FTP Server, and Web Sharing with port-forwarding), replaces the PDF viewer with Jetpack's native `androidx.pdf:pdf-viewer-fragment`, introduces a custom Compose Excel spreadsheet viewer, integrates the office document layout engine from [`all-documents-reader`](https://github.com/ahmadullahpk/all-documents-reader), implements split APK bundle installation, a built-in terminal emulator inspired by [`Xed-Editor`](https://github.com/Xed-Editor/Xed-Editor), and adds support for Shizuku/root privileged file access.
 
 <div align="center">
