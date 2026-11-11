@@ -3,7 +3,6 @@
 
 <div align="center">
 
-<img src="assets/app_icon.png" width="120" alt="File Manager by ZenLabs logo"/>
 
 # File Manager by ShesalZen
 
