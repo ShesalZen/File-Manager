@@ -1,12 +1,11 @@
 > [!NOTE]
-> **This repository is a feature-rich fork of the original [Prism File Explorer](https://github.com/techflyers/Prism-File-Explorer) project.**
-> It integrates premium companion features from [`NFile`](https://github.com/Senzme/NFile) (including a Private Wallet, Local FTP Server, and Web Sharing with port-forwarding), replaces the PDF viewer with Jetpack's native `androidx.pdf:pdf-viewer-fragment`, introduces a custom Compose Excel spreadsheet viewer, integrates the office document layout engine from [`all-documents-reader`](https://github.com/ahmadullahpk/all-documents-reader), implements split APK bundle installation, a built-in terminal emulator inspired by [`Xed-Editor`](https://github.com/Xed-Editor/Xed-Editor), and adds support for Shizuku/root privileged file access.
+> **This repository is a feature-rich fork (including a Private Wallet, Local FTP Server, and Web Sharing with port-forwarding), replaces the PDF viewer with Jetpack's native `androidx.pdf:pdf-viewer-fragment`, introduces a custom Compose Excel spreadsheet viewer, integrates the office document layout engine from [`all-documents-reader`](https://github.com/ahmadullahpk/all-documents-reader), implements split APK bundle installation, a built-in terminal emulator inspired by [`Xed-Editor`](https://github.com/Xed-Editor/Xed-Editor), and adds support for Shizuku/root privileged file access.
 
 <div align="center">
 
 <img src="assets/app_icon.png" width="120" alt="File Manager by ZenLabs logo"/>
 
-# File Manager by ZenLabs
+# File Manager by ShesalZen
 
 [![Platform](https://img.shields.io/badge/Platform-Android-brightgreen.svg?logo=android)](https://www.android.com/)
 [![License](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
@@ -23,39 +22,15 @@
 
 ---
 
-## 📱 Screenshots
+## Key Features
 
-<div align="center">
-  <img src="assets/image1.png" width="22%"/>
-  <img src="assets/image2.png" width="22%"/>
-  <img src="assets/image3.png" width="22%"/>
-  <img src="assets/image4.png" width="22%"/>
-</div>
-
-<div align="center">
-  <img src="assets/image6.png" width="22%"/>
-  <img src="assets/image7.png" width="22%"/>
-  <img src="assets/image8.png" width="22%"/>
-  <img src="assets/image9.png" width="22%"/>
-</div>
-
-<div align="center">
-  <img src="assets/image10.png" width="21%"/>
-  <img src="assets/image11.png" width="21%"/>
-  <img src="assets/image12.png" width="21%"/>
-</div>
-
----
-
-## ✨ Key Features
-
-### 🎨 **Modern User Interface & Navigation**
+### **Modern User Interface & Navigation**
 *   **Jetpack Compose & Material 3**: Fully declarative, highly responsive, and beautiful layouts with automatic light/dark theme support.
 *   **NFile Navigation Drawer**: Quick-navigation sidebar for accessing the **Dashboard**, **System Root**, **Recycle Bin**, and server/network configuration wizard.
 *   **Multi-Tab Layout**: Seamlessly open, navigate, and manage multiple folders at once.
 *   **Intuitive Breadcrumbs**: Quick hierarchical folder traversal.
 
-### 📁 **Advanced File Management**
+### **Advanced File Management**
 *   **Comprehensive Operations**: Copy, cut, paste, rename, delete, batch select, and inspect detailed properties of files and folders.
 *   **Interactive Clipboard FAB**: An `ExtendedFloatingActionButton` dynamically shows "Paste here" / "Move here" options for pending clipboard items.
 *   **Intelligent Duplicate Renaming**: Same-folder copy operations automatically bypass directory validation and append a ` (copy)` suffix.
@@ -67,11 +42,9 @@
 *   **Cryptographic Scrambling**: Encrypts and decrypts files using **SHA-256 password salting** and custom **byte XOR-scrambling**.
 *   **Seamless Temporary Viewing**: Decrypts files temporarily to the cache for inline viewer viewing and automatically scrubs them on exit.
 
-### 🌐 **Servers & Remote Connections**
+### 🌐 **Local Server**
 *   **Local FTP Server**: Run a background FTP server via a persistent `FtpForegroundService` with notification-area status controls.
 *   **Web Sharing Portal**: Host an offline directory listing server, support chunked/range media streaming for browser viewing, accept remote POST file uploads, and establish secure public tunnels via SSH client port-forwarding to `localhost.run`.
-*   **Remote Connection Wizard**: Configure and save connections for **FTP**, **SFTP** (via `sshj`), **WebDAV**, and **SMB/LAN** servers.
-*   **Remote Explorer**: Manage remote storages natively, download, upload, create folders, and delete remote files.
 
 ### 🗜️ **Archive Management**
 *   **Quick Context Actions**: Right-click context menus enable rapid extraction of `.zip`, `.7z`, and `.rar` archives.
@@ -90,18 +63,18 @@
 *   **Video Player Speed Control**: Toggle playback speeds directly from the video interface, implemented brightness and volume gestures.
 *   **Image Merger**: Multi-select images and stitch them vertically or horizontally into a single output JPEG.
 
-### 🔍 **Smart Search & AI Integrations**
+### **Smart Search & AI Integrations**
 *   **Auto-Trigger Search**: Debounced search-on-type execution immediately fires when query lengths hit 2+ characters.
 *   **AI Semantic Search**: Integrates semantic matching with OCR support and provides similarity scores (e.g. `Semantic match score: 92%`) shown in search results.
 
-### 📦 **Terminal & PRoot Integrations**
+### **Terminal & PRoot Integrations**
 *   **Modular Terminal Stack**: Composes `terminal-emulator`, `terminal-view`, and `link2symlink` into a unified codebase.
 *   **Ubuntu/PRoot Environment**: Provisions an isolated Ubuntu container using PRoot with customizable setup scripts.
 *   **Session Management**: Keeps track of active terminal sessions with persistence and quick-reset settings.
 *   **Editor Workflow Run-Program Flow**: Hooks directly into the built-in text editor to execute scripts and programs instantly.
 
 
-### 📦 **System Integrations**
+### **System Integrations**
 *   **Split APK Installation**: Support for `.apks`, `.xapk`, and `.apkm` split bundles with session install progress indicators.
 *   **"Open With" History**: Bubbles recently used applications to the top of the dialog based on file extensions.
 *   **Open In New Button**: Launch a file directly with alternative system apps via the quick action bar.
@@ -124,7 +97,7 @@
 
 ---
 
-## 🔨 Building from Source
+## Building from Source
 
 ### Prerequisites
 
@@ -202,7 +175,7 @@ See [`docs/native-sanitizer-ci.md`](docs/native-sanitizer-ci.md) for the CI cont
 
 ---
 
-## 🔐 Security Model
+## Security Model
 
 The release includes explicit protections for remote services and locally stored credentials:
 
