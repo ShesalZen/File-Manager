@@ -43,7 +43,7 @@ This repository is a feature-rich repository (including a Private Wallet, Local 
 *   **Local FTP Server**: Run a background FTP server via a persistent `FtpForegroundService` with notification-area status controls.
 *   **Web Sharing Portal**: Host an offline directory listing server, support chunked/range media streaming for browser viewing, accept remote POST file uploads, and establish secure public tunnels via SSH client port-forwarding to `localhost.run`.
 
-### 🗜️ **Archive Management**
+### **Archive Management**
 *   **Quick Context Actions**: Right-click context menus enable rapid extraction of `.zip`, `.7z`, and `.rar` archives.
 *   **Configurable Compression**: Choose password protection (**AES-256**) and compression scales (Store, Fastest, Fast, Normal, Maximum, Ultra) when creating archives.
 *   **Encrypted Archive Listing**: Decoupled from the UI thread using `zip4j`, allowing users to enter passwords to list or browse encrypted entries cleanly.
