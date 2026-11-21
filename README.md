@@ -1,4 +1,4 @@
-> **This repository is a feature-rich fork (including a Private Wallet, Local FTP Server, and Web Sharing with port-forwarding), replaces the PDF viewer with Jetpack's native `androidx.pdf:pdf-viewer-fragment`, introduces a custom Compose Excel spreadsheet viewer, integrates the office document layout engine from [`all-documents-reader`](https://github.com/ahmadullahpk/all-documents-reader), implements split APK bundle installation, a built-in terminal emulator inspired by [`Xed-Editor`](https://github.com/Xed-Editor/Xed-Editor), and adds support for Shizuku/root privileged file access.
+This repository is a feature-rich repository (including a Private Wallet, Local FTP Server, and Web Sharing with port-forwarding), replaces the PDF viewer with Jetpack's native `androidx.pdf:pdf-viewer-fragment`, introduces a custom Compose Excel spreadsheet viewer, integrates the office document layout engine from [`all-documents-reader`](https://github.com/ahmadullahpk/all-documents-reader), implements split APK bundle installation, a built-in terminal emulator inspired by [`Xed-Editor`](https://github.com/Xed-Editor/Xed-Editor), and adds support for Shizuku/root privileged file access.
 
 <div align="center">
 
@@ -6,7 +6,6 @@
 # File Manager by ShesalZen
 
 [![Platform](https://img.shields.io/badge/Platform-Android-brightgreen.svg?logo=android)](https://www.android.com/)
-[![License](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Release](https://img.shields.io/github/v/release/ShesalZen/File-Manager?label=Release)](https://github.com/ShesalZen/File-Manager/releases)
 [![APK Downloads](https://img.shields.io/github/downloads/ShesalZen/File-Manager/total.svg?label=APK%20Downloads)](https://github.com/ShesalZen/File-Manager/releases)
 [![Stars](https://img.shields.io/github/stars/ShesalZen/File-Manager?style=flat&logo=github)](https://github.com/ShesalZen/File-Manager/stargazers)
